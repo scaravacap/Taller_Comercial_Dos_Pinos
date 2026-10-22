@@ -1,0 +1,2233 @@
+{
+  "datasets": [
+    {
+      "name": "ds_metricas",
+      "displayName": "Métricas comerciales (metric view)",
+      "asset_name": "__catalog_scp.dos_pinos_taller_comercial.vgd_cmr_gestion_comercial"
+    },
+    {
+      "name": "ds_avance_diario",
+      "displayName": "Avance diario vs plan",
+      "queryLines": [
+        "WITH fechas AS (\n",
+        "  SELECT DISTINCT FECHA_CONTAB AS fecha FROM vtx_cmr_gestion_comercial\n",
+        "), dims AS (\n",
+        "  SELECT DISTINCT GERENCIA_BASE AS gerencia_base, CLIGRP3_DESC AS canal_nivel3 FROM vtx_cmr_gestion_comercial\n",
+        "), diario AS (\n",
+        "  SELECT FECHA_CONTAB AS fecha, GERENCIA_BASE AS gerencia_base, CLIGRP3_DESC AS canal_nivel3,\n",
+        "         SUM(VTA_COL) AS venta_dia, SUM(VTA_PLAN_COL) AS plan_mes\n",
+        "  FROM vtx_cmr_gestion_comercial GROUP BY ALL\n",
+        "), grilla AS (\n",
+        "  SELECT f.fecha, d.gerencia_base, d.canal_nivel3,\n",
+        "         COALESCE(x.venta_dia, 0) AS venta_dia,\n",
+        "         SUM(COALESCE(x.plan_mes, 0)) OVER (PARTITION BY d.gerencia_base, d.canal_nivel3) AS plan_mes,\n",
+        "         DENSE_RANK() OVER (ORDER BY f.fecha) AS dia_laboral\n",
+        "  FROM fechas f CROSS JOIN dims d\n",
+        "  LEFT JOIN diario x ON x.fecha = f.fecha AND x.gerencia_base = d.gerencia_base AND x.canal_nivel3 = d.canal_nivel3\n",
+        ")\n",
+        "SELECT fecha, gerencia_base, canal_nivel3, venta_dia,\n",
+        "       SUM(venta_dia) OVER (PARTITION BY gerencia_base, canal_nivel3 ORDER BY fecha) AS venta_acumulada,\n",
+        "       plan_mes * dia_laboral / 27 AS plan_prorrateado\n",
+        "FROM grilla\n",
+        "ORDER BY fecha\n"
+      ]
+    },
+    {
+      "name": "ds_pronostico",
+      "displayName": "Pronóstico diario ai_forecast",
+      "queryLines": [
+        "WITH observado AS (\n",
+        "  SELECT FECHA_CONTAB AS fecha, GERENCIA_BASE AS gerencia_base, SUM(VTA_COL) AS venta_neta\n",
+        "  FROM vtx_cmr_gestion_comercial\n",
+        "  WHERE FECHA_CONTAB > DATE'2026-10-01'\n",
+        "  GROUP BY ALL\n",
+        "), pronostico AS (\n",
+        "  SELECT * FROM ai_forecast(\n",
+        "    observed => TABLE(observado),\n",
+        "    horizon => '2026-10-31',\n",
+        "    time_col => 'fecha',\n",
+        "    value_col => 'venta_neta',\n",
+        "    group_col => 'gerencia_base',\n",
+        "    prediction_interval_width => 0.8,\n",
+        "    frequency => 'D')\n",
+        ")\n",
+        "SELECT fecha, gerencia_base, venta_neta AS venta_real, CAST(NULL AS DOUBLE) AS venta_pronostico,\n",
+        "       CAST(NULL AS DOUBLE) AS limite_inferior, CAST(NULL AS DOUBLE) AS limite_superior\n",
+        "FROM observado\n",
+        "UNION ALL\n",
+        "SELECT p.fecha, p.gerencia_base, NULL, p.venta_neta_forecast, p.venta_neta_lower, p.venta_neta_upper\n",
+        "FROM pronostico p\n",
+        "WHERE p.fecha > (SELECT MAX(fecha) FROM observado) AND DAYOFWEEK(p.fecha) <> 1\n",
+        "ORDER BY fecha\n"
+      ]
+    },
+    {
+      "name": "ds_cierre_proyectado",
+      "displayName": "Cierre proyectado del mes",
+      "queryLines": [
+        "WITH observado AS (\n",
+        "  SELECT FECHA_CONTAB AS fecha, SUM(VTA_COL) AS venta_neta\n",
+        "  FROM vtx_cmr_gestion_comercial\n",
+        "  WHERE FECHA_CONTAB > DATE'2026-10-01'\n",
+        "  GROUP BY ALL\n",
+        "), resto AS (\n",
+        "  SELECT SUM(venta_neta_forecast) AS venta_pronosticada_resto,\n",
+        "         SUM(venta_neta_lower) AS resto_escenario_bajo,\n",
+        "         SUM(venta_neta_upper) AS resto_escenario_alto\n",
+        "  FROM ai_forecast(\n",
+        "    observed => TABLE(observado), horizon => '2026-10-31', time_col => 'fecha',\n",
+        "    value_col => 'venta_neta', prediction_interval_width => 0.8, frequency => 'D')\n",
+        "  WHERE fecha > (SELECT MAX(fecha) FROM observado) AND DAYOFWEEK(fecha) <> 1\n",
+        "), mes AS (\n",
+        "  SELECT SUM(VTA_COL) AS venta_real_mes, SUM(VTA_PLAN_COL) AS venta_plan,\n",
+        "         SUM(VTA_PROYECTADA_COL) AS proyeccion_dos_pinos\n",
+        "  FROM vtx_cmr_gestion_comercial\n",
+        ")\n",
+        "SELECT venta_real_mes, venta_pronosticada_resto,\n",
+        "       venta_real_mes + venta_pronosticada_resto AS cierre_proyectado,\n",
+        "       venta_plan,\n",
+        "       (venta_real_mes + venta_pronosticada_resto) / venta_plan AS cumplimiento_proyectado,\n",
+        "       (venta_real_mes + resto_escenario_bajo) / venta_plan AS cumplimiento_escenario_bajo,\n",
+        "       (venta_real_mes + resto_escenario_alto) / venta_plan AS cumplimiento_escenario_alto,\n",
+        "       proyeccion_dos_pinos,\n",
+        "       proyeccion_dos_pinos / venta_plan AS cumplimiento_proyeccion_dos_pinos\n",
+        "FROM mes CROSS JOIN resto\n"
+      ]
+    },
+    {
+      "name": "ds_decision_ia",
+      "displayName": "Decisión comercial ai_decide",
+      "queryLines": [
+        "WITH kpi AS (\n",
+        "  SELECT CLIENTE_NOMBRE3 AS cliente, GERENCIA_BASE AS gerencia_base,\n",
+        "         SUM(VTA_COL) AS venta_neta, SUM(VTA_PLAN_COL) AS venta_plan,\n",
+        "         ROUND(TRY_DIVIDE(SUM(VTA_COL), SUM(VTA_PLAN_COL)) * 100, 1) AS cumplimiento_plan_pct,\n",
+        "         ROUND(MAX(D_LABOR) / MAX(LABOR_MES_ACT) * 100, 1) AS avance_dias_pct,\n",
+        "         ROUND(TRY_DIVIDE(SUM(DESC_COL), SUM(VTAB_COL)) * 100, 2) AS descuento_pct,\n",
+        "         ROUND(TRY_DIVIDE(-SUM(DEV_COL), SUM(VTAB_COL)) * 100, 2) AS devolucion_pct,\n",
+        "         COUNT(DISTINCT MAT_ID) AS skus_vendidos\n",
+        "  FROM vtx_cmr_gestion_comercial\n",
+        "  WHERE (:gerencia = 'TODAS' OR GERENCIA_BASE = :gerencia)\n",
+        "  GROUP BY ALL\n",
+        "  HAVING SUM(VTA_PLAN_COL) > 0\n",
+        "), decision AS (\n",
+        "  SELECT *, ROUND(avance_dias_pct - cumplimiento_plan_pct, 1) AS brecha_puntos,\n",
+        "    ai_decide(\n",
+        "      to_json(named_struct('cliente', cliente,\n",
+        "                           'brecha_puntos', ROUND(avance_dias_pct - cumplimiento_plan_pct, 1),\n",
+        "                           'descuento_pct', descuento_pct,\n",
+        "                           'devolucion_pct', devolucion_pct,\n",
+        "                           'skus_vendidos', skus_vendidos)),\n",
+        "      '{\"accion\": {\"type\": \"choice\",\n",
+        "                   \"instructions\": \"Elige la accion comercial para este cliente de Dos Pinos antes del cierre de mes. brecha_puntos positiva significa que el cliente va atrasado frente a los dias laborados.\",\n",
+        "                   \"criteria\": {\"acelerar\": \"brecha_puntos mayor a 0 y descuento_pct menor a 3 y devolucion_pct menor a 1\",\n",
+        "                                \"mantener\": \"brecha_puntos menor o igual a 0 y descuento_pct menor a 3 y devolucion_pct menor a 1\",\n",
+        "                                \"revisar_descuentos\": \"descuento_pct mayor o igual a 3\",\n",
+        "                                \"atender_devoluciones\": \"devolucion_pct mayor o igual a 1 y descuento_pct menor a 3\"}},\n",
+        "        \"urgencia\": {\"type\": \"score\",\n",
+        "                     \"instructions\": \"Que tan urgente es actuar con este cliente segun brecha_puntos?\",\n",
+        "                     \"criteria\": [\"Sin presion: brecha_puntos menor o igual a 0\",\n",
+        "                                  \"Atender esta semana: brecha_puntos entre 0 y 15\",\n",
+        "                                  \"Actuar hoy: brecha_puntos mayor a 15\"]}}'\n",
+        "    ) AS d\n",
+        "  FROM kpi\n",
+        ")\n",
+        "SELECT cliente, gerencia_base, venta_neta, venta_plan, cumplimiento_plan_pct, avance_dias_pct, brecha_puntos,\n",
+        "       descuento_pct, devolucion_pct, skus_vendidos,\n",
+        "       d:response.answers.accion.choice::string AS accion_ia,\n",
+        "       ROUND(d:response.answers.accion.confidence::double, 2) AS confianza_accion,\n",
+        "       ROUND(d:response.answers.urgencia.score::double, 2) AS urgencia_ia\n",
+        "FROM decision\n",
+        "ORDER BY urgencia_ia DESC, brecha_puntos DESC\n"
+      ],
+      "parameters": [
+        {
+          "displayName": "gerencia",
+          "keyword": "gerencia",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "TODAS"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ds_gerencias",
+      "displayName": "Opciones de gerencia",
+      "queryLines": [
+        "SELECT 'TODAS' AS gerencia\n",
+        "UNION ALL\n",
+        "SELECT DISTINCT GERENCIA_BASE AS gerencia FROM vtx_cmr_gestion_comercial\n"
+      ]
+    },
+    {
+      "name": "ds_segmento_ia",
+      "displayName": "Segmento de materiales ai_classify",
+      "queryLines": [
+        "WITH top_materiales AS (\n",
+        "  SELECT MAT_DESC AS material, CATEG AS categoria, SUM(VTA_COL) AS venta_neta, SUM(KL) AS kilolitros\n",
+        "  FROM vtx_cmr_gestion_comercial\n",
+        "  GROUP BY ALL\n",
+        "  ORDER BY venta_neta DESC\n",
+        "  LIMIT 60\n",
+        ")\n",
+        "SELECT material, categoria, venta_neta, kilolitros,\n",
+        "       ai_classify(material, ARRAY('lacteo saludable', 'indulgente o snack', 'bebida no lactea', 'basico de canasta')) AS segmento_ia\n",
+        "FROM top_materiales\n",
+        "ORDER BY venta_neta DESC\n"
+      ]
+    },
+    {
+      "name": "ds_resumen_ejecutivo",
+      "displayName": "Resumen ejecutivo ai_gen",
+      "queryLines": [
+        "WITH g AS (\n",
+        "  SELECT GERENCIA_BASE AS gerencia_base,\n",
+        "         ROUND(SUM(VTA_COL) / 1e6, 1) AS venta_neta_millones,\n",
+        "         ROUND(TRY_DIVIDE(SUM(VTA_COL), SUM(VTA_PLAN_COL)) * 100, 1) AS cumplimiento_plan_pct,\n",
+        "         ROUND(TRY_DIVIDE(SUM(DESC_COL), SUM(VTAB_COL)) * 100, 2) AS descuento_pct\n",
+        "  FROM vtx_cmr_gestion_comercial\n",
+        "  GROUP BY ALL\n",
+        "), cat AS (\n",
+        "  SELECT GERENCIA_BASE AS gerencia_base, MAX_BY(CATEG, venta) AS categoria_lider\n",
+        "  FROM (SELECT GERENCIA_BASE, CATEG, SUM(VTA_COL) AS venta FROM vtx_cmr_gestion_comercial GROUP BY ALL)\n",
+        "  GROUP BY ALL\n",
+        ")\n",
+        "SELECT gerencia_base, venta_neta_millones, cumplimiento_plan_pct, descuento_pct, categoria_lider,\n",
+        "       regexp_replace(\n",
+        "         ai_gen(CONCAT('Eres analista comercial de Dos Pinos. En maximo dos oraciones y en espanol, resume el desempeno de octubre ',\n",
+        "                       'de la gerencia ', gerencia_base, ': venta neta de ', venta_neta_millones, ' millones de colones, ',\n",
+        "                       cumplimiento_plan_pct, '% del plan con 55.6% de los dias laborables transcurridos, descuento de ',\n",
+        "                       descuento_pct, '% sobre venta bruta; su categoria lider es ', categoria_lider,\n",
+        "                       '. Termina con una recomendacion concreta. No uses guiones largos.')),\n",
+        "         '\\\\s*\\u2014\\\\s*', ', ') AS resumen_ia\n",
+        "FROM g JOIN cat USING (gerencia_base)\n",
+        "ORDER BY venta_neta_millones DESC\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "resumen_comercial",
+      "displayName": "Resumen comercial",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "titulo_resumen",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Gestión Comercial Dos Pinos con IA\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "subtitulo_resumen",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Octubre 2026, del 1 al 17. Venta neta, plan y forecast en colones sobre la metric view `vgd_cmr_gestion_comercial` de Unity Catalog.\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "nota_datos",
+            "multilineTextboxSpec": {
+              "lines": [
+                "*El plan del mes está cargado el 1 de octubre; por eso este tablero no filtra por fecha.*\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_venta_neta",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "measure(venta_neta_col)",
+                      "expression": "MEASURE(`venta_neta_col`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(venta_neta_col)",
+                  "displayName": "Venta neta",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "CRC",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Venta neta ₡"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_cumplimiento_plan",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "measure(cumplimiento_plan_col)",
+                      "expression": "MEASURE(`cumplimiento_plan_col`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(cumplimiento_plan_col)",
+                  "displayName": "% Cumplimiento plan",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }}%"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "% Cumplimiento plan"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_cumplimiento_fcst",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "measure(cumplimiento_fcst_col)",
+                      "expression": "MEASURE(`cumplimiento_fcst_col`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(cumplimiento_fcst_col)",
+                  "displayName": "% Cumplimiento forecast",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }}%"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "% Cumplimiento forecast"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_clientes_activos",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "measure(clientes_activos)",
+                      "expression": "MEASURE(`clientes_activos`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(clientes_activos)",
+                  "displayName": "Clientes activos"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Clientes activos"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_real_vs_plan_gerencia",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "gerencia_base",
+                      "expression": "`gerencia_base`"
+                    },
+                    {
+                      "name": "measure(venta_neta_col)",
+                      "expression": "MEASURE(`venta_neta_col`)"
+                    },
+                    {
+                      "name": "measure(venta_plan_col)",
+                      "expression": "MEASURE(`venta_plan_col`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "gerencia_base",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Gerencia"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "CRC",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "measure(venta_neta_col)",
+                      "displayName": "Venta real"
+                    },
+                    {
+                      "fieldName": "measure(venta_plan_col)",
+                      "displayName": "Plan"
+                    }
+                  ]
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "mark": {
+                "layout": "group"
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Venta real vs plan por gerencia"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "line_avance_vs_plan",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_avance_diario",
+                  "fields": [
+                    {
+                      "name": "fecha",
+                      "expression": "`fecha`"
+                    },
+                    {
+                      "name": "sum(venta_acumulada)",
+                      "expression": "SUM(`venta_acumulada`)"
+                    },
+                    {
+                      "name": "sum(plan_prorrateado)",
+                      "expression": "SUM(`plan_prorrateado`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "fecha",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Fecha"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "CRC",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "sum(venta_acumulada)",
+                      "displayName": "Venta acumulada"
+                    },
+                    {
+                      "fieldName": "sum(plan_prorrateado)",
+                      "displayName": "Plan prorrateado"
+                    }
+                  ]
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Avance acumulado vs plan prorrateado",
+                "showDescription": true,
+                "description": "Plan del mes repartido en 27 días laborables"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 6,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "tabla_categorias",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "categoria",
+                      "expression": "`categoria`"
+                    },
+                    {
+                      "name": "measure(venta_neta_col)",
+                      "expression": "MEASURE(`venta_neta_col`)"
+                    },
+                    {
+                      "name": "measure(venta_plan_col)",
+                      "expression": "MEASURE(`venta_plan_col`)"
+                    },
+                    {
+                      "name": "measure(venta_fcst_col)",
+                      "expression": "MEASURE(`venta_fcst_col`)"
+                    },
+                    {
+                      "name": "measure(cumplimiento_plan_col)",
+                      "expression": "MEASURE(`cumplimiento_plan_col`)"
+                    },
+                    {
+                      "name": "measure(descuento_col)",
+                      "expression": "MEASURE(`descuento_col`)"
+                    },
+                    {
+                      "name": "measure(devolucion_col)",
+                      "expression": "MEASURE(`devolucion_col`)"
+                    }
+                  ],
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "DESC",
+                      "expression": "MEASURE(`venta_neta_col`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "categoria",
+                    "displayName": "Categoría"
+                  },
+                  {
+                    "fieldName": "measure(venta_neta_col)",
+                    "displayName": "Venta neta",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "CRC",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(venta_plan_col)",
+                    "displayName": "Plan",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "CRC",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(venta_fcst_col)",
+                    "displayName": "Forecast",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "CRC",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(cumplimiento_plan_col)",
+                    "displayName": "% Cumplimiento plan",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(descuento_col)",
+                    "displayName": "Descuento",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "CRC",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(devolucion_col)",
+                    "displayName": "Devolución",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "CRC",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Desempeño por categoría"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 12,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "pie_negocio",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "negocio",
+                      "expression": "`negocio`"
+                    },
+                    {
+                      "name": "measure(venta_neta_col)",
+                      "expression": "MEASURE(`venta_neta_col`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pie",
+              "encodings": {
+                "angle": {
+                  "fieldName": "measure(venta_neta_col)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Venta neta",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "CRC",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "negocio",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Negocio"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Venta neta por negocio"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 19,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "mapa_clientes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "latitud",
+                      "expression": "`latitud`"
+                    },
+                    {
+                      "name": "longitud",
+                      "expression": "`longitud`"
+                    },
+                    {
+                      "name": "measure(venta_neta_col)",
+                      "expression": "MEASURE(`venta_neta_col`)"
+                    }
+                  ],
+                  "disaggregated": false,
+                  "filters": [
+                    {
+                      "expression": "`latitud` <> 0"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "symbol-map",
+              "encodings": {
+                "coordinates": {
+                  "latitude": {
+                    "fieldName": "latitud"
+                  },
+                  "longitude": {
+                    "fieldName": "longitud"
+                  }
+                },
+                "color": {
+                  "fieldName": "measure(venta_neta_col)",
+                  "displayName": "Venta neta",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": {
+                      "mode": "custom-sequential",
+                      "colors": {
+                        "start": "#F5C518",
+                        "end": "#1B7A3E"
+                      }
+                    }
+                  }
+                },
+                "size": {
+                  "fieldName": "measure(venta_neta_col)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "mark": {
+                "opacity": 0.8
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Clientes por ubicación",
+                "showDescription": true,
+                "description": "Tamaño y color según venta neta; excluye clientes sin coordenadas"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 19,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "ia_pronostico_decisiones",
+      "displayName": "IA: pronóstico y decisiones",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "titulo_ia",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## IA: pronóstico y decisiones\n",
+                "\n",
+                "**ai_forecast** proyecta la venta diaria de lo que resta de octubre a partir de lo vendido del 2 al 17, con una banda de confianza del 80%.\n",
+                "\n",
+                "**ai_decide** lee los indicadores de cada cliente y elige la acción comercial y su urgencia, directamente en SQL.\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_cierre_proyectado",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cierre_proyectado",
+                  "fields": [
+                    {
+                      "name": "cierre_proyectado",
+                      "expression": "`cierre_proyectado`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "cierre_proyectado",
+                  "displayName": "Cierre proyectado",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "CRC",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Cierre proyectado ai_forecast",
+                "showDescription": true,
+                "description": "Venta real a la fecha más el pronóstico del resto del mes"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_pct_plan_proyectado",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cierre_proyectado",
+                  "fields": [
+                    {
+                      "name": "cumplimiento_proyectado",
+                      "expression": "`cumplimiento_proyectado`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "cumplimiento_proyectado",
+                  "displayName": "% plan proyectado (ai_forecast)",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "% plan proyectado (ai_forecast)"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 3,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_pct_plan_dos_pinos",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cierre_proyectado",
+                  "fields": [
+                    {
+                      "name": "cumplimiento_proyeccion_dos_pinos",
+                      "expression": "`cumplimiento_proyeccion_dos_pinos`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "cumplimiento_proyeccion_dos_pinos",
+                  "displayName": "% plan con proyección Dos Pinos",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "% plan con proyección Dos Pinos",
+                "showDescription": true,
+                "description": "Proyección actual de Dos Pinos, para comparar"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 3,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_escenario_bajo",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cierre_proyectado",
+                  "fields": [
+                    {
+                      "name": "cumplimiento_escenario_bajo",
+                      "expression": "`cumplimiento_escenario_bajo`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "cumplimiento_escenario_bajo",
+                  "displayName": "Escenario bajo (% plan)",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Escenario bajo (% plan)",
+                "showDescription": true,
+                "description": "Límite inferior de la banda de ai_forecast"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 6,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_escenario_alto",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cierre_proyectado",
+                  "fields": [
+                    {
+                      "name": "cumplimiento_escenario_alto",
+                      "expression": "`cumplimiento_escenario_alto`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "cumplimiento_escenario_alto",
+                  "displayName": "Escenario alto (% plan)",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Escenario alto (% plan)",
+                "showDescription": true,
+                "description": "Límite superior de la banda de ai_forecast"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 6,
+            "width": 6,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "forecast_venta_diaria",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_pronostico",
+                  "fields": [
+                    {
+                      "name": "fecha",
+                      "expression": "`fecha`"
+                    },
+                    {
+                      "name": "sum(venta_real)",
+                      "expression": "SUM(`venta_real`)"
+                    },
+                    {
+                      "name": "sum(venta_pronostico)",
+                      "expression": "SUM(`venta_pronostico`)"
+                    },
+                    {
+                      "name": "sum(limite_inferior)",
+                      "expression": "SUM(`limite_inferior`)"
+                    },
+                    {
+                      "name": "sum(limite_superior)",
+                      "expression": "SUM(`limite_superior`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "forecast-line",
+              "encodings": {
+                "x": {
+                  "fieldName": "fecha",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Fecha"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "CRC",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  },
+                  "original": {
+                    "fieldName": "sum(venta_real)",
+                    "displayName": "Venta real"
+                  },
+                  "prediction": {
+                    "fieldName": "sum(venta_pronostico)",
+                    "displayName": "Pronóstico ai_forecast"
+                  },
+                  "predictionUpper": {
+                    "fieldName": "sum(limite_superior)"
+                  },
+                  "predictionLower": {
+                    "fieldName": "sum(limite_inferior)"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Venta diaria real y pronóstico al cierre de octubre",
+                "showDescription": true,
+                "description": "Banda de confianza del 80%; excluye domingos y el 1 de octubre"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_gerencia_ia",
+            "queries": [
+              {
+                "name": "q_opciones",
+                "query": {
+                  "datasetName": "ds_gerencias",
+                  "fields": [
+                    {
+                      "name": "gerencia",
+                      "expression": "`gerencia`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "q_param",
+                "query": {
+                  "datasetName": "ds_decision_ia",
+                  "parameters": [
+                    {
+                      "name": "gerencia",
+                      "keyword": "gerencia"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "gerencia",
+                    "displayName": "Gerencia",
+                    "queryName": "q_opciones"
+                  },
+                  {
+                    "parameterName": "gerencia",
+                    "queryName": "q_param"
+                  }
+                ]
+              },
+              "selection": {
+                "defaultSelection": {
+                  "values": {
+                    "dataType": "STRING",
+                    "values": [
+                      {
+                        "value": "TODAS"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Gerencia para la recomendación IA"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 15,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "nota_decision",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Al cambiar la gerencia, **ai_decide** vuelve a evaluar solo los clientes de esa gerencia. Urgencia: 0 sin presión, 1 atender esta semana, 2 actuar hoy.\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 15,
+            "width": 8,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "tabla_decision_ia",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_decision_ia",
+                  "fields": [
+                    {
+                      "name": "cliente",
+                      "expression": "`cliente`"
+                    },
+                    {
+                      "name": "accion_ia",
+                      "expression": "`accion_ia`"
+                    },
+                    {
+                      "name": "urgencia_ia",
+                      "expression": "`urgencia_ia`"
+                    },
+                    {
+                      "name": "confianza_accion",
+                      "expression": "`confianza_accion`"
+                    },
+                    {
+                      "name": "gerencia_base",
+                      "expression": "`gerencia_base`"
+                    },
+                    {
+                      "name": "venta_neta",
+                      "expression": "`venta_neta`"
+                    },
+                    {
+                      "name": "venta_plan",
+                      "expression": "`venta_plan`"
+                    },
+                    {
+                      "name": "cumplimiento_plan_pct",
+                      "expression": "`cumplimiento_plan_pct`"
+                    },
+                    {
+                      "name": "avance_dias_pct",
+                      "expression": "`avance_dias_pct`"
+                    },
+                    {
+                      "name": "brecha_puntos",
+                      "expression": "`brecha_puntos`"
+                    },
+                    {
+                      "name": "descuento_pct",
+                      "expression": "`descuento_pct`"
+                    },
+                    {
+                      "name": "devolucion_pct",
+                      "expression": "`devolucion_pct`"
+                    },
+                    {
+                      "name": "skus_vendidos",
+                      "expression": "`skus_vendidos`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "cliente",
+                    "displayName": "Cliente"
+                  },
+                  {
+                    "fieldName": "accion_ia",
+                    "displayName": "Acción IA"
+                  },
+                  {
+                    "fieldName": "urgencia_ia",
+                    "displayName": "Urgencia IA",
+                    "style": {
+                      "type": "basic",
+                      "rules": [
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "1.5"
+                            },
+                            "operator": ">="
+                          },
+                          "backgroundColor": {
+                            "hex": "#E8833A"
+                          }
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "0.5"
+                            },
+                            "operator": ">="
+                          },
+                          "backgroundColor": {
+                            "hex": "#F5C518"
+                          }
+                        },
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "0.5"
+                            },
+                            "operator": "<"
+                          },
+                          "backgroundColor": {
+                            "hex": "#4FA56C"
+                          }
+                        }
+                      ]
+                    },
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "confianza_accion",
+                    "displayName": "Confianza",
+                    "format": {
+                      "type": "number-percent",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "gerencia_base",
+                    "displayName": "Gerencia"
+                  },
+                  {
+                    "fieldName": "venta_neta",
+                    "displayName": "Venta neta",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "CRC",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "venta_plan",
+                    "displayName": "Plan",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "CRC",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "cumplimiento_plan_pct",
+                    "displayName": "% Cumplimiento plan",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "avance_dias_pct",
+                    "displayName": "% Días laborados",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "brecha_puntos",
+                    "displayName": "Brecha (puntos)",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "descuento_pct",
+                    "displayName": "% Descuento",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "devolucion_pct",
+                    "displayName": "% Devolución",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "skus_vendidos",
+                    "displayName": "SKUs vendidos"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Acción recomendada por cliente (ai_decide)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 8,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_acciones_ia",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_decision_ia",
+                  "fields": [
+                    {
+                      "name": "accion_ia",
+                      "expression": "`accion_ia`"
+                    },
+                    {
+                      "name": "count(cliente)",
+                      "expression": "COUNT(`cliente`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "accion_ia",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Acción IA"
+                },
+                "y": {
+                  "fieldName": "count(cliente)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Clientes"
+                },
+                "color": {
+                  "fieldName": "accion_ia",
+                  "displayName": "Acción IA",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "acelerar",
+                        "color": "#1B7A3E"
+                      },
+                      {
+                        "value": "mantener",
+                        "color": "#2272B4"
+                      },
+                      {
+                        "value": "revisar_descuentos",
+                        "color": "#F5C518"
+                      },
+                      {
+                        "value": "atender_devoluciones",
+                        "color": "#E8833A"
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Clientes por acción recomendada"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 17,
+            "width": 4,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_segmento_ia",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_segmento_ia",
+                  "fields": [
+                    {
+                      "name": "segmento_ia",
+                      "expression": "`segmento_ia`"
+                    },
+                    {
+                      "name": "sum(venta_neta)",
+                      "expression": "SUM(`venta_neta`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "segmento_ia",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Segmento IA"
+                },
+                "y": {
+                  "fieldName": "sum(venta_neta)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Venta neta",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "CRC",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "segmento_ia",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Segmento IA"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Venta de los 60 materiales principales por segmento (ai_classify)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 24,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "tabla_resumen_ejecutivo",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_resumen_ejecutivo",
+                  "fields": [
+                    {
+                      "name": "gerencia_base",
+                      "expression": "`gerencia_base`"
+                    },
+                    {
+                      "name": "venta_neta_millones",
+                      "expression": "`venta_neta_millones`"
+                    },
+                    {
+                      "name": "cumplimiento_plan_pct",
+                      "expression": "`cumplimiento_plan_pct`"
+                    },
+                    {
+                      "name": "descuento_pct",
+                      "expression": "`descuento_pct`"
+                    },
+                    {
+                      "name": "categoria_lider",
+                      "expression": "`categoria_lider`"
+                    },
+                    {
+                      "name": "resumen_ia",
+                      "expression": "`resumen_ia`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "gerencia_base",
+                    "displayName": "Gerencia"
+                  },
+                  {
+                    "fieldName": "venta_neta_millones",
+                    "displayName": "Venta neta (millones ₡)",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "cumplimiento_plan_pct",
+                    "displayName": "% Cumplimiento plan",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "descuento_pct",
+                    "displayName": "% Descuento",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "categoria_lider",
+                    "displayName": "Categoría líder"
+                  },
+                  {
+                    "fieldName": "resumen_ia",
+                    "displayName": "Resumen IA"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Resumen ejecutivo por gerencia (ai_gen)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 30,
+            "width": 12,
+            "height": 7
+          }
+        }
+      ]
+    },
+    {
+      "name": "filtros",
+      "displayName": "Filtros",
+      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "filtro_gerencia",
+            "queries": [
+              {
+                "name": "f_gerencia_base_ds_metricas",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "gerencia_base",
+                      "expression": "`gerencia_base`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_gerencia_base_ds_avance_diario",
+                "query": {
+                  "datasetName": "ds_avance_diario",
+                  "fields": [
+                    {
+                      "name": "gerencia_base",
+                      "expression": "`gerencia_base`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_gerencia_base_ds_pronostico",
+                "query": {
+                  "datasetName": "ds_pronostico",
+                  "fields": [
+                    {
+                      "name": "gerencia_base",
+                      "expression": "`gerencia_base`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_gerencia_base_ds_decision_ia",
+                "query": {
+                  "datasetName": "ds_decision_ia",
+                  "fields": [
+                    {
+                      "name": "gerencia_base",
+                      "expression": "`gerencia_base`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_gerencia_base_ds_resumen_ejecutivo",
+                "query": {
+                  "datasetName": "ds_resumen_ejecutivo",
+                  "fields": [
+                    {
+                      "name": "gerencia_base",
+                      "expression": "`gerencia_base`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "gerencia_base",
+                    "displayName": "Gerencia",
+                    "queryName": "f_gerencia_base_ds_metricas"
+                  },
+                  {
+                    "fieldName": "gerencia_base",
+                    "displayName": "Gerencia",
+                    "queryName": "f_gerencia_base_ds_avance_diario"
+                  },
+                  {
+                    "fieldName": "gerencia_base",
+                    "displayName": "Gerencia",
+                    "queryName": "f_gerencia_base_ds_pronostico"
+                  },
+                  {
+                    "fieldName": "gerencia_base",
+                    "displayName": "Gerencia",
+                    "queryName": "f_gerencia_base_ds_decision_ia"
+                  },
+                  {
+                    "fieldName": "gerencia_base",
+                    "displayName": "Gerencia",
+                    "queryName": "f_gerencia_base_ds_resumen_ejecutivo"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Gerencia"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_canal",
+            "queries": [
+              {
+                "name": "f_canal_nivel3_ds_metricas",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "canal_nivel3",
+                      "expression": "`canal_nivel3`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_canal_nivel3_ds_avance_diario",
+                "query": {
+                  "datasetName": "ds_avance_diario",
+                  "fields": [
+                    {
+                      "name": "canal_nivel3",
+                      "expression": "`canal_nivel3`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "canal_nivel3",
+                    "displayName": "Canal (nivel 3)",
+                    "queryName": "f_canal_nivel3_ds_metricas"
+                  },
+                  {
+                    "fieldName": "canal_nivel3",
+                    "displayName": "Canal (nivel 3)",
+                    "queryName": "f_canal_nivel3_ds_avance_diario"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Canal (nivel 3)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_categoria",
+            "queries": [
+              {
+                "name": "f_categoria_ds_metricas",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "categoria",
+                      "expression": "`categoria`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_categoria_ds_segmento_ia",
+                "query": {
+                  "datasetName": "ds_segmento_ia",
+                  "fields": [
+                    {
+                      "name": "categoria",
+                      "expression": "`categoria`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "categoria",
+                    "displayName": "Categoría",
+                    "queryName": "f_categoria_ds_metricas"
+                  },
+                  {
+                    "fieldName": "categoria",
+                    "displayName": "Categoría",
+                    "queryName": "f_categoria_ds_segmento_ia"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Categoría"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_provincia",
+            "queries": [
+              {
+                "name": "f_provincia_ds_metricas",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "provincia",
+                      "expression": "`provincia`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "provincia",
+                    "displayName": "Provincia",
+                    "queryName": "f_provincia_ds_metricas"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Provincia"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_marca",
+            "queries": [
+              {
+                "name": "f_marca_ds_metricas",
+                "query": {
+                  "datasetName": "ds_metricas",
+                  "fields": [
+                    {
+                      "name": "marca",
+                      "expression": "`marca`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "marca",
+                    "displayName": "Marca",
+                    "queryName": "f_marca_ds_metricas"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Marca"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 4,
+            "height": 2
+          }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#F5F7F3",
+        "dark": "#141414"
+      },
+      "widgetBackgroundColor": {
+        "light": "#FFFFFF",
+        "dark": "#1A1A1A"
+      },
+      "widgetBorderColor": {
+        "light": "#FFFFFF",
+        "dark": "#1A1A1A"
+      },
+      "fontColor": {
+        "light": "#1A1A1A",
+        "dark": "#EEF2EC"
+      },
+      "selectionColor": {
+        "light": "#1B7A3E",
+        "dark": "#4FA56C"
+      },
+      "visualizationColors": [
+        "#1B7A3E",
+        "#F5C518",
+        "#2272B4",
+        "#4FA56C",
+        "#E8833A",
+        "#7A4FA0",
+        "#1A1A1A"
+      ],
+      "widgetHeaderAlignment": "LEFT",
+      "widgetCornerRadius": 12
+    }
+  }
+}

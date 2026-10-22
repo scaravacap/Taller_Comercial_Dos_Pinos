@@ -1,0 +1,308 @@
+{
+  "version": 2,
+  "config": {
+    "sample_questions": [
+      {
+        "id": "73c9fe21111868d23c2644476e43a0ec",
+        "question": [
+          "¿Qué clientes superan el límite de descuento de su gerencia según la política comercial?"
+        ]
+      },
+      {
+        "id": "73dbabcebad4870b42b7613cb5d6378f",
+        "question": [
+          "¿Cuáles son las 10 categorías con más venta neta y su cumplimiento?"
+        ]
+      },
+      {
+        "id": "7c3af767d1f424b23b70dd7eae621555",
+        "question": [
+          "¿Cómo vamos contra el plan por gerencia?"
+        ]
+      },
+      {
+        "id": "e487943ce45672affb661ec197ed5e7c",
+        "question": [
+          "¿Qué clientes van atrasados frente al avance esperado del mes?"
+        ]
+      },
+      {
+        "id": "e9422438d5c9338f71ce64b4bd3210b6",
+        "question": [
+          "¿Cuál es el cierre proyectado del mes con ai_forecast?"
+        ]
+      }
+    ]
+  },
+  "data_sources": {
+    "tables": [
+      {
+        "identifier": "__catalog_scp.dos_pinos_taller_comercial.vtx_cmr_gestion_comercial",
+        "description": [
+          "Detalle de venta del mes por fecha contable, cliente y material. Columnas en mayúscula. Usar para detalle diario, descuentos, devoluciones y avance esperado."
+        ],
+        "column_configs": [
+          {
+            "column_name": "CATEG",
+            "enable_entity_matching": true,
+            "enable_format_assistance": true
+          },
+          {
+            "column_name": "CLIENTE_NOMBRE3",
+            "enable_entity_matching": true,
+            "enable_format_assistance": true
+          },
+          {
+            "column_name": "GERENCIA_BASE",
+            "enable_entity_matching": true,
+            "enable_format_assistance": true
+          },
+          {
+            "column_name": "MARCA",
+            "enable_entity_matching": true,
+            "enable_format_assistance": true
+          },
+          {
+            "column_name": "PROV_DESC",
+            "enable_entity_matching": true,
+            "enable_format_assistance": true
+          }
+        ]
+      }
+    ],
+    "metric_views": [
+      {
+        "identifier": "__catalog_scp.dos_pinos_taller_comercial.vgd_cmr_gestion_comercial",
+        "description": [
+          "Metric view gobernada de gestión comercial: venta neta, plan, forecast y cumplimiento. Fuente preferida para KPIs."
+        ]
+      }
+    ],
+    "volumes": [
+      {
+        "path": "/Volumes/__catalog_scp/dos_pinos_taller_comercial/documentos_comerciales"
+      }
+    ]
+  },
+  "instructions": {
+    "text_instructions": [
+      {
+        "id": "e1403d6e7f5e9a4b9090db9056e5b08a",
+        "content": [
+          "Eres el asistente comercial de Dos Pinos para el seguimiento de la venta del mes. Responde siempre en español.\n",
+          "\n",
+          "Fuentes y medidas\n",
+          "- Prefiere la metric view vgd_cmr_gestion_comercial con MEASURE() para venta neta (venta_neta_col), plan (venta_plan_col), forecast (venta_fcst_col), cumplimiento (cumplimiento_plan_col, cumplimiento_fcst_col), clientes_activos y skus_vendidos. Usa la tabla vtx_cmr_gestion_comercial solo para detalle por fila, por fecha o para calcular el avance esperado.\n",
+          "- \"Cumplimiento\" sin más contexto significa cumplimiento contra plan. \"Forecast\" o \"FCST\" es el pronóstico comercial que carga Dos Pinos (venta_fcst_col), no la función ai_forecast.\n",
+          "- \"Proyección\" o \"cierre proyectado\" usa venta_proyectada_col. Si piden un pronóstico estadístico, usa ai_forecast sobre la venta diaria como en el SQL de ejemplo.\n",
+          "\n",
+          "Reglas del negocio\n",
+          "- El plan y el forecast del mes están cargados el 1 de octubre. Nunca filtres por rango de fechas al calcular cumplimiento. Si piden el cumplimiento de una semana o de un rango, explica esta limitación y compara contra el plan prorrateado por días laborados.\n",
+          "- Avance esperado del mes = días laborados / días laborables del mes (columnas D_LABOR y LABOR_MES_ACT, hoy 15 de 27, o sea 55,6 %).\n",
+          "- Un cliente está atrasado si su cumplimiento del plan está más de 5 puntos por debajo del avance esperado.\n",
+          "- Descuento % = DESC_COL / VTAB_COL. Devolución % = -DEV_COL / VTAB_COL. Ambos sobre venta bruta.\n",
+          "- No uses margen ni costo: en esta muestra el costo es 0 y el margen sale 100 %.\n",
+          "- El 1 de octubre la venta neta es negativa por devoluciones del cierre anterior. Menciónalo si alguien pregunta por la venta diaria.\n",
+          "- Gerencias: SUPERMERCADOS WM (Walmart), SUPERMERCADOS y CUENTAS ESPECIALES.\n",
+          "\n",
+          "Documentos\n",
+          "- Para preguntas sobre límites de descuento, aprobaciones, devoluciones o el proceso de ventas, consulta el documento politica_comercial_ejemplo.pdf del volume y cita la página. Aclara que es un documento de ejemplo.\n",
+          "\n",
+          "Formato\n",
+          "- Montos en colones (₡), en millones con un decimal. Porcentajes con un decimal.\n",
+          "\n",
+          "Instructions you must follow when providing summaries\n",
+          "- Empieza con la cifra principal, sigue con 3 viñetas cortas y cierra con una acción sugerida para el ejecutivo comercial."
+        ]
+      }
+    ],
+    "example_question_sqls": [
+      {
+        "id": "18eb9958af9e3879e6cf4ae40b3afd2b",
+        "question": [
+          "¿Cuál es el cierre proyectado del mes con ai_forecast?"
+        ],
+        "sql": [
+          "WITH observado AS (\n",
+          "  SELECT FECHA_CONTAB AS fecha, SUM(VTA_COL) AS venta_neta\n",
+          "  FROM __catalog_scp.dos_pinos_taller_comercial.vtx_cmr_gestion_comercial\n",
+          "  WHERE FECHA_CONTAB > DATE'2026-10-01'\n",
+          "  GROUP BY ALL\n",
+          "), resto AS (\n",
+          "  SELECT SUM(venta_neta_forecast) AS pronostico_resto\n",
+          "  FROM ai_forecast(observed => TABLE(observado), horizon => '2026-10-31', time_col => 'fecha',\n",
+          "                   value_col => 'venta_neta', frequency => 'D')\n",
+          "  WHERE fecha > (SELECT MAX(fecha) FROM observado) AND DAYOFWEEK(fecha) <> 1\n",
+          ")\n",
+          "SELECT ROUND((SELECT SUM(VTA_COL) FROM __catalog_scp.dos_pinos_taller_comercial.vtx_cmr_gestion_comercial) / 1e6, 1) AS venta_real_millones,\n",
+          "       ROUND(pronostico_resto / 1e6, 1) AS pronostico_resto_millones,\n",
+          "       ROUND(((SELECT SUM(VTA_COL) FROM __catalog_scp.dos_pinos_taller_comercial.vtx_cmr_gestion_comercial) + pronostico_resto)\n",
+          "             / (SELECT SUM(VTA_PLAN_COL) FROM __catalog_scp.dos_pinos_taller_comercial.vtx_cmr_gestion_comercial) * 100, 1) AS cumplimiento_proyectado_pct\n",
+          "FROM resto"
+        ],
+        "usage_guidance": [
+          "Pronóstico estadístico de la venta diaria hasta fin de mes. Excluye el 1 de octubre (devoluciones) y los domingos del horizonte."
+        ]
+      },
+      {
+        "id": "252e403783c1a2fbaea19f476b34bf9a",
+        "question": [
+          "¿Qué clientes van atrasados frente al avance esperado del mes?"
+        ],
+        "sql": [
+          "SELECT CLIENTE_NOMBRE3 AS cliente, GERENCIA_BASE AS gerencia,\n",
+          "       ROUND(SUM(VTA_COL) / SUM(VTA_PLAN_COL) * 100, 1) AS cumplimiento_plan_pct,\n",
+          "       ROUND(MAX(D_LABOR) / MAX(LABOR_MES_ACT) * 100, 1) AS avance_esperado_pct,\n",
+          "       ROUND(MAX(D_LABOR) / MAX(LABOR_MES_ACT) * 100 - SUM(VTA_COL) / SUM(VTA_PLAN_COL) * 100, 1) AS brecha_puntos\n",
+          "FROM __catalog_scp.dos_pinos_taller_comercial.vtx_cmr_gestion_comercial\n",
+          "GROUP BY ALL\n",
+          "HAVING SUM(VTA_PLAN_COL) > 0\n",
+          "ORDER BY brecha_puntos DESC"
+        ],
+        "usage_guidance": [
+          "Brecha = avance esperado menos cumplimiento. Positiva significa atrasado. Atrasado si la brecha es mayor a 5 puntos."
+        ]
+      },
+      {
+        "id": "bc45fe7cc19dc0be7844a69c671f41c2",
+        "question": [
+          "¿Cómo vamos contra el plan por gerencia?"
+        ],
+        "sql": [
+          "SELECT gerencia_base,\n",
+          "       MEASURE(venta_neta_col) / 1e6 AS venta_neta_millones,\n",
+          "       MEASURE(venta_plan_col) / 1e6 AS plan_millones,\n",
+          "       MEASURE(cumplimiento_plan_col) AS cumplimiento_plan_pct,\n",
+          "       MEASURE(cumplimiento_fcst_col) AS cumplimiento_fcst_pct\n",
+          "FROM __catalog_scp.dos_pinos_taller_comercial.vgd_cmr_gestion_comercial\n",
+          "GROUP BY ALL\n",
+          "ORDER BY venta_neta_millones DESC"
+        ],
+        "usage_guidance": [
+          "Cumplimiento por cualquier dimensión de la metric view: cambie gerencia_base por canal_nivel3, categoria, marca o cliente_nombre."
+        ]
+      },
+      {
+        "id": "c11578568fd4a06ac73c9917a75d98d0",
+        "question": [
+          "¿Cuál es la venta neta diaria del mes?"
+        ],
+        "sql": [
+          "SELECT FECHA_CONTAB AS fecha, SUM(VTA_COL) / 1e6 AS venta_neta_millones\n",
+          "FROM __catalog_scp.dos_pinos_taller_comercial.vtx_cmr_gestion_comercial\n",
+          "GROUP BY ALL\n",
+          "ORDER BY fecha"
+        ],
+        "usage_guidance": [
+          "Venta diaria por fecha contable. El 1 de octubre es negativo por devoluciones."
+        ]
+      },
+      {
+        "id": "cbbfc900c179f418079e56622159be7e",
+        "question": [
+          "¿Qué clientes superan el límite de descuento de su gerencia?"
+        ],
+        "sql": [
+          "SELECT CLIENTE_NOMBRE3 AS cliente, GERENCIA_BASE AS gerencia,\n",
+          "       ROUND(SUM(DESC_COL) / SUM(VTAB_COL) * 100, 2) AS descuento_pct,\n",
+          "       CASE GERENCIA_BASE WHEN 'SUPERMERCADOS WM' THEN 3.0 WHEN 'SUPERMERCADOS' THEN 4.0 ELSE 5.0 END AS limite_pct\n",
+          "FROM __catalog_scp.dos_pinos_taller_comercial.vtx_cmr_gestion_comercial\n",
+          "GROUP BY ALL\n",
+          "HAVING SUM(VTAB_COL) > 0\n",
+          "ORDER BY descuento_pct DESC"
+        ],
+        "usage_guidance": [
+          "Límites del documento de política de ejemplo: SUPERMERCADOS WM 3 %, SUPERMERCADOS 4 %, CUENTAS ESPECIALES 5 %."
+        ]
+      }
+    ]
+  },
+  "benchmarks": {
+    "questions": [
+      {
+        "id": "03b1432d838935e341a19356cf8b289c",
+        "question": [
+          "¿Cuál es la venta neta total del mes?"
+        ],
+        "answer": [
+          {
+            "format": "SQL",
+            "content": [
+              "SELECT MEASURE(venta_neta_col) AS venta_neta FROM __catalog_scp.dos_pinos_taller_comercial.vgd_cmr_gestion_comercial"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "3740d14de2183058d85c3d76a3ef7558",
+        "question": [
+          "Dame las 5 marcas con más venta neta"
+        ],
+        "answer": [
+          {
+            "format": "SQL",
+            "content": [
+              "SELECT marca, MEASURE(venta_neta_col) AS venta_neta FROM __catalog_scp.dos_pinos_taller_comercial.vgd_cmr_gestion_comercial GROUP BY ALL ORDER BY venta_neta DESC LIMIT 5"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "48c077bbc6e6e52bdad071fb4703d66b",
+        "question": [
+          "¿Qué porcentaje del plan lleva Supermercados WM?"
+        ],
+        "answer": [
+          {
+            "format": "SQL",
+            "content": [
+              "SELECT MEASURE(cumplimiento_plan_col) AS cumplimiento_plan_pct FROM __catalog_scp.dos_pinos_taller_comercial.vgd_cmr_gestion_comercial WHERE gerencia_base = 'SUPERMERCADOS WM'"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "6ae056839597193ffb180f672704c7df",
+        "question": [
+          "¿Cuál es el cliente con mayor descuento sobre venta bruta?"
+        ],
+        "answer": [
+          {
+            "format": "SQL",
+            "content": [
+              "SELECT CLIENTE_NOMBRE3 AS cliente, SUM(DESC_COL) / SUM(VTAB_COL) * 100 AS descuento_pct FROM __catalog_scp.dos_pinos_taller_comercial.vtx_cmr_gestion_comercial GROUP BY ALL HAVING SUM(VTAB_COL) > 0 ORDER BY descuento_pct DESC LIMIT 1"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "94a43453a9e177dc5c049981fdbccaf6",
+        "question": [
+          "¿Cuántos clientes activos hay por gerencia?"
+        ],
+        "answer": [
+          {
+            "format": "SQL",
+            "content": [
+              "SELECT gerencia_base, MEASURE(clientes_activos) AS clientes_activos FROM __catalog_scp.dos_pinos_taller_comercial.vgd_cmr_gestion_comercial GROUP BY ALL ORDER BY gerencia_base"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "97a337fffc7ee61c3d45572cc029b177",
+        "question": [
+          "¿Qué provincia tiene el mayor cumplimiento del plan?"
+        ],
+        "answer": [
+          {
+            "format": "SQL",
+            "content": [
+              "SELECT provincia, MEASURE(cumplimiento_plan_col) AS cumplimiento_plan_pct FROM __catalog_scp.dos_pinos_taller_comercial.vgd_cmr_gestion_comercial GROUP BY ALL ORDER BY cumplimiento_plan_pct DESC LIMIT 1"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

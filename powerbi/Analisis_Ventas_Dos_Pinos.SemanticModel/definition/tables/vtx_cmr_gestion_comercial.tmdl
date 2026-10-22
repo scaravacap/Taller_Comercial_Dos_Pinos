@@ -1,0 +1,375 @@
+table vtx_cmr_gestion_comercial
+	lineageTag: 3a272cef-1b0a-4513-afbd-e87cf40ea908
+
+	/// Venta neta en millones de colones.
+	measure 'Venta Real M' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), 1000000)
+		formatString: #,0.0
+		displayFolder: 1. Ventas (M₡)
+		lineageTag: eafd8020-e9fb-45ee-acb7-d38199a42e4c
+
+	/// Venta bruta en millones de colones.
+	measure 'Venta Bruta M' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTAB_COL]), 1000000)
+		formatString: #,0.0
+		displayFolder: 1. Ventas (M₡)
+		lineageTag: 39015ff6-33c5-4618-a334-8a153c96181b
+
+	/// Plan del mes completo (se carga el día 1).
+	measure 'Plan Mes M' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]), 1000000)
+		formatString: #,0.0
+		displayFolder: 1. Ventas (M₡)
+		lineageTag: f21cca95-b660-40d0-a3e5-e783edadd8f2
+
+	/// Forecast del mes completo (se carga el día 1).
+	measure 'FCST Mes M' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_FCST_COL]), 1000000)
+		formatString: #,0.0
+		displayFolder: 1. Ventas (M₡)
+		lineageTag: 975055b1-15fb-4b23-a3eb-98b09241ca51
+
+	/// Plan ponderado a los días laborados (plan mes × laborados / laborables).
+	measure 'Plan Pond M' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PLAN_POND_COL]), 1000000)
+		formatString: #,0.0
+		displayFolder: 1. Ventas (M₡)
+		lineageTag: 3dd0e931-bef7-4882-a783-1a326ddb1dde
+
+	/// Forecast ponderado a los días laborados.
+	measure 'FCST Pond M' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_FCST_POND_COL]), 1000000)
+		formatString: #,0.0
+		displayFolder: 1. Ventas (M₡)
+		lineageTag: 0f914a8b-70b6-432e-aea9-747c9ea64e04
+
+	/// Proyección de cierre: venta real / laborados × laborables.
+	measure 'Venta Proyectada M' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PROYECTADA_COL]), 1000000)
+		formatString: #,0.0
+		displayFolder: 1. Ventas (M₡)
+		lineageTag: 1d6e032b-3bf6-4f57-abab-df34d7013f08
+
+	/// Δ₡ contra el plan ponderado.
+	measure 'Dif vs Plan M' = [Venta Real M] - [Plan Pond M]
+		formatString: #,0.0
+		displayFolder: 1. Ventas (M₡)
+		lineageTag: ae4578f1-db41-4b36-a547-fbd0a302aaca
+
+	/// Δ₡ contra el forecast ponderado.
+	measure 'Dif vs FCST M' = [Venta Real M] - [FCST Pond M]
+		formatString: #,0.0
+		displayFolder: 1. Ventas (M₡)
+		lineageTag: 7d03e658-27e1-4329-a589-a353b7a580b0
+
+	/// Venta real / plan ponderado (como el reporte original).
+	measure '% Cump Plan' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_PLAN_POND_COL]))
+		formatString: 0.0%
+		displayFolder: 2. Cumplimiento
+		lineageTag: 0aedd14b-f179-4107-a337-af6b38a7ee2d
+
+	/// Venta real / forecast ponderado.
+	measure '% Cump FCST' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_FCST_POND_COL]))
+		formatString: 0.0%
+		displayFolder: 2. Cumplimiento
+		lineageTag: 6a74c0b5-1a13-4d46-a799-303f12541608
+
+	/// Venta real / plan del mes completo.
+	measure '% Avance Plan Mes' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]))
+		formatString: 0.0%
+		displayFolder: 2. Cumplimiento
+		lineageTag: 33c30194-4584-49d7-a69b-ee212885aa0a
+
+	/// Venta real / forecast del mes completo.
+	measure '% Avance FCST Mes' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_FCST_COL]))
+		formatString: 0.0%
+		displayFolder: 2. Cumplimiento
+		lineageTag: eb56a768-ca5f-490c-ae88-fe6778157097
+
+	/// Proyección de cierre / plan del mes.
+	measure '% Proyeccion vs Plan' = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PROYECTADA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]))
+		formatString: 0.0%
+		displayFolder: 2. Cumplimiento
+		lineageTag: 2c3d155d-fb44-4f57-a6d6-1b7641841a7a
+
+	/// Venta real acumulada hasta el día del mes.
+	measure 'Venta Acumulada M' = CALCULATE([Venta Real M], FILTER(ALL(vtx_cmr_gestion_comercial[DIA_MES]), vtx_cmr_gestion_comercial[DIA_MES] <= MAX(vtx_cmr_gestion_comercial[DIA_MES])))
+		formatString: #,0.0
+		displayFolder: 3. Avance diario
+		lineageTag: faf18c7e-3940-4f0b-ac16-b9ae0339dbac
+
+	/// Plan del mes prorrateado por días con venta hasta el día del mes.
+	measure 'Plan Pond Acumulado M' = CALCULATE([Plan Mes M], ALL(vtx_cmr_gestion_comercial[DIA_MES])) * DIVIDE(CALCULATE(DISTINCTCOUNT(vtx_cmr_gestion_comercial[DIA_MES]), FILTER(ALL(vtx_cmr_gestion_comercial[DIA_MES]), vtx_cmr_gestion_comercial[DIA_MES] <= MAX(vtx_cmr_gestion_comercial[DIA_MES]))), MAX(vtx_cmr_gestion_comercial[LABOR_MES_ACT]))
+		formatString: #,0.0
+		displayFolder: 3. Avance diario
+		lineageTag: 1b84d5cc-654a-4ca8-aaa2-e8b3b54d12fa
+
+	/// Descuento sobre venta bruta.
+	measure '% Descuento' = DIVIDE(SUM(vtx_cmr_gestion_comercial[DESC_COL]), SUM(vtx_cmr_gestion_comercial[VTAB_COL]))
+		formatString: 0.0%
+		displayFolder: 4. Calidad comercial
+		lineageTag: f22f812f-3397-47d2-a4c4-23fc0c23ea72
+
+	/// Devolución sobre venta bruta (DEV_COL viene en negativo).
+	measure '% Devolucion' = DIVIDE(-SUM(vtx_cmr_gestion_comercial[DEV_COL]), SUM(vtx_cmr_gestion_comercial[VTAB_COL]))
+		formatString: 0.0%
+		displayFolder: 4. Calidad comercial
+		lineageTag: 7d9e6352-87fc-4eb0-a0bb-b345db1b38b2
+
+	/// Clientes con movimiento.
+	measure 'Clientes Activos' = DISTINCTCOUNT(vtx_cmr_gestion_comercial[CLIENTE_ID])
+		formatString: #,0
+		displayFolder: 4. Calidad comercial
+		lineageTag: 14f33343-1fe5-4993-a560-a1855d4c2a98
+
+	/// Materiales distintos con movimiento.
+	measure 'SKUs' = DISTINCTCOUNT(vtx_cmr_gestion_comercial[MAT_ID])
+		formatString: #,0
+		displayFolder: 4. Calidad comercial
+		lineageTag: 1ebcef6f-a646-4bb6-a99e-e33b3aa6fb77
+
+	/// Volumen en kilolitros.
+	measure 'Volumen KL' = SUM(vtx_cmr_gestion_comercial[KL])
+		formatString: #,0.0
+		displayFolder: 4. Calidad comercial
+		lineageTag: d6fac822-2e20-4c6b-a58d-ce8b95d2662f
+
+	/// Venta real solo para los 10 materiales de mayor venta en el filtro actual.
+	measure 'Venta Top 10 Material M' = IF(RANKX(ALLSELECTED(vtx_cmr_gestion_comercial[MAT_DESC]), [Venta Real M]) <= 10, [Venta Real M])
+		formatString: #,0.0
+		displayFolder: 4. Calidad comercial
+		lineageTag: 9328dfe5-0ea5-40d4-ad48-f4f92f26b5c8
+
+	/// Días laborados del mes.
+	measure 'Dias Laborados' = MAX(vtx_cmr_gestion_comercial[D_LABOR])
+		formatString: 0
+		displayFolder: 5. Calendario
+		lineageTag: afc73c02-c7f8-4269-afa3-72d7184876b4
+
+	/// Días laborables del mes.
+	measure 'Dias Laborables' = MAX(vtx_cmr_gestion_comercial[LABOR_MES_ACT])
+		formatString: 0
+		displayFolder: 5. Calendario
+		lineageTag: 6d472046-0368-4152-ab19-bc0e6e8766dc
+
+	/// Días laborables pendientes.
+	measure 'Dias Pendientes' = MAX(vtx_cmr_gestion_comercial[D_PENDI])
+		formatString: 0
+		displayFolder: 5. Calendario
+		lineageTag: c0bcf39b-d117-4e2a-a55d-a288ed92712d
+
+	column FECHA_CONTAB
+		dataType: dateTime
+		formatString: Short Date
+		lineageTag: bf9d0f83-7585-4571-a98a-dad03c7a8638
+		summarizeBy: none
+		sourceColumn: FECHA_CONTAB
+
+	column DIA_MES
+		dataType: int64
+		lineageTag: 89c8b81d-9a52-4864-a21b-57083706b394
+		summarizeBy: none
+		sourceColumn: DIA_MES
+
+	column MES_L
+		dataType: string
+		lineageTag: 5a3fa61e-c4ff-4f6e-a4ae-237aae59fbc3
+		summarizeBy: none
+		sourceColumn: MES_L
+
+	column LABOR_MES_ACT
+		dataType: double
+		formatString: 0
+		lineageTag: bcbf9ec7-0338-41c8-a555-6678022039e3
+		summarizeBy: none
+		sourceColumn: LABOR_MES_ACT
+
+	column D_LABOR
+		dataType: double
+		formatString: 0
+		lineageTag: 384a7f8f-ce52-43cf-a638-c9b5c99bf34e
+		summarizeBy: none
+		sourceColumn: D_LABOR
+
+	column D_PENDI
+		dataType: double
+		formatString: 0
+		lineageTag: 7d0c6a50-927f-4cd7-ab03-fef67d2e7cd3
+		summarizeBy: none
+		sourceColumn: D_PENDI
+
+	column GERENCIA_BASE
+		dataType: string
+		lineageTag: 5a6c9e3c-00c6-4457-ad08-d7cee1d38d99
+		summarizeBy: none
+		sourceColumn: GERENCIA_BASE
+
+	column CLIGRP3_DESC
+		dataType: string
+		lineageTag: 4f88cef5-080e-4418-af5b-609ce74ecace
+		summarizeBy: none
+		sourceColumn: CLIGRP3_DESC
+
+	column FORMATO_DESC
+		dataType: string
+		lineageTag: 18001014-bbe4-4547-abb5-38da5036b764
+		summarizeBy: none
+		sourceColumn: FORMATO_DESC
+
+	column CADENA_DESC
+		dataType: string
+		lineageTag: b3f6473e-e068-4cac-adce-5f8bf10da684
+		summarizeBy: none
+		sourceColumn: CADENA_DESC
+
+	column PROV_DESC
+		dataType: string
+		lineageTag: c2b423e1-21c9-4366-a9ec-72f2224cca26
+		summarizeBy: none
+		sourceColumn: PROV_DESC
+
+	column EJECUTIVO_DESC
+		dataType: string
+		lineageTag: 70d6d3d8-e15e-4022-aeab-bd358c8749b2
+		summarizeBy: none
+		sourceColumn: EJECUTIVO_DESC
+
+	column CLIENTE_NOMBRE3
+		dataType: string
+		lineageTag: 12b7d9e4-7243-48cf-a437-7c1c1cbb2429
+		summarizeBy: none
+		sourceColumn: CLIENTE_NOMBRE3
+
+	column CLIENTE_ID
+		dataType: string
+		lineageTag: ddd1eeeb-9324-4889-a086-f1be308710a7
+		summarizeBy: none
+		sourceColumn: CLIENTE_ID
+
+	column CATEG
+		dataType: string
+		lineageTag: bece0364-1e7d-472a-aaee-02aa4c91efc0
+		summarizeBy: none
+		sourceColumn: CATEG
+
+	column SUBCATEG
+		dataType: string
+		lineageTag: 2d40568e-636d-49fa-a8b9-d8ec1f3255e5
+		summarizeBy: none
+		sourceColumn: SUBCATEG
+
+	column MARCA
+		dataType: string
+		lineageTag: 4297610b-de3e-45f0-aff6-cba6ace086f6
+		summarizeBy: none
+		sourceColumn: MARCA
+
+	column MAT_DESC
+		dataType: string
+		lineageTag: ff676d86-1fc5-4c88-a546-040cbed1119c
+		summarizeBy: none
+		sourceColumn: MAT_DESC
+
+	column MAT_ID
+		dataType: string
+		lineageTag: 1188c261-c3fe-41fe-a4bc-854c55975afa
+		summarizeBy: none
+		sourceColumn: MAT_ID
+
+	column NEGOCIO
+		dataType: string
+		lineageTag: ef36ae9d-9196-4597-afc1-8019149aef0d
+		summarizeBy: none
+		sourceColumn: NEGOCIO
+
+	column VTA_COL
+		dataType: double
+		formatString: #,0
+		lineageTag: 11128fff-204e-4a5b-a444-724ec86d6c53
+		summarizeBy: none
+		sourceColumn: VTA_COL
+
+	column VTAB_COL
+		dataType: double
+		formatString: #,0
+		lineageTag: 46a72066-8065-44d9-a4a4-695ca3a9a0aa
+		summarizeBy: none
+		sourceColumn: VTAB_COL
+
+	column DESC_COL
+		dataType: double
+		formatString: #,0
+		lineageTag: 6ea5267c-0044-4f40-a084-80d0642a94a1
+		summarizeBy: none
+		sourceColumn: DESC_COL
+
+	column DEV_COL
+		dataType: double
+		formatString: #,0
+		lineageTag: ba059c72-6b8c-4af5-afc6-524064d454b3
+		summarizeBy: none
+		sourceColumn: DEV_COL
+
+	column VTA_FCST_COL
+		dataType: double
+		formatString: #,0
+		lineageTag: 990df46a-e588-41f6-a59e-92d2d1d9153f
+		summarizeBy: none
+		sourceColumn: VTA_FCST_COL
+
+	column VTA_PLAN_COL
+		dataType: double
+		formatString: #,0
+		lineageTag: b82da3a4-8557-4018-ade0-03c83c3ef62c
+		summarizeBy: none
+		sourceColumn: VTA_PLAN_COL
+
+	column VTA_FCST_POND_COL
+		dataType: double
+		formatString: #,0
+		lineageTag: 88352d7f-71ec-4b62-a742-b525e46ca334
+		summarizeBy: none
+		sourceColumn: VTA_FCST_POND_COL
+
+	column VTA_PLAN_POND_COL
+		dataType: double
+		formatString: #,0
+		lineageTag: 73bf9cb5-f2fa-4c30-a6de-4239eec051e9
+		summarizeBy: none
+		sourceColumn: VTA_PLAN_POND_COL
+
+	column VTA_POND_COL
+		dataType: double
+		formatString: #,0
+		lineageTag: b54cd15c-9f2a-4145-a2c3-714edf44b304
+		summarizeBy: none
+		sourceColumn: VTA_POND_COL
+
+	column VTA_PROYECTADA_COL
+		dataType: double
+		formatString: #,0
+		lineageTag: 6b599a26-de14-4e83-a3c1-8fd95b4e4751
+		summarizeBy: none
+		sourceColumn: VTA_PROYECTADA_COL
+
+	column KL
+		dataType: double
+		formatString: #,0.0
+		lineageTag: c65a07ff-7e8e-42ef-a2b4-dc99748ccd10
+		summarizeBy: none
+		sourceColumn: KL
+
+	column CANTB
+		dataType: double
+		formatString: #,0
+		lineageTag: de1ba99b-0c75-4b2d-ac15-650ea4009acb
+		summarizeBy: none
+		sourceColumn: CANTB
+
+	partition vtx_cmr_gestion_comercial = m
+		mode: import
+		source =
+				let
+				    Source = Databricks.Catalogs("adb-0000000000000000.0.azuredatabricks.net", "/sql/1.0/warehouses/0000000000000000", [Implementation="2.0"]),
+				    Catalogo = Source{[Name="prd_gold",Kind="Database"]}[Data],
+				    Esquema = Catalogo{[Name="bix_cmr_ab_nacional",Kind="Schema"]}[Data],
+				    Tabla = Esquema{[Name="vtx_cmr_gestion_comercial",Kind="Table"]}[Data],
+				    Columnas = Table.SelectColumns(Tabla, {"FECHA_CONTAB", "DIA_MES", "MES_L", "LABOR_MES_ACT", "D_LABOR", "D_PENDI", "GERENCIA_BASE", "CLIGRP3_DESC", "FORMATO_DESC", "CADENA_DESC", "PROV_DESC", "EJECUTIVO_DESC", "CLIENTE_NOMBRE3", "CLIENTE_ID", "CATEG", "SUBCATEG", "MARCA", "MAT_DESC", "MAT_ID", "NEGOCIO", "VTA_COL", "VTAB_COL", "DESC_COL", "DEV_COL", "VTA_FCST_COL", "VTA_PLAN_COL", "VTA_FCST_POND_COL", "VTA_PLAN_POND_COL", "VTA_POND_COL", "VTA_PROYECTADA_COL", "KL", "CANTB"}),
+				    Tipos = Table.TransformColumnTypes(Columnas, {{"FECHA_CONTAB", type date}, {"DIA_MES", Int64.Type}, {"MES_L", type text}, {"LABOR_MES_ACT", type number}, {"D_LABOR", type number}, {"D_PENDI", type number}, {"GERENCIA_BASE", type text}, {"CLIGRP3_DESC", type text}, {"FORMATO_DESC", type text}, {"CADENA_DESC", type text}, {"PROV_DESC", type text}, {"EJECUTIVO_DESC", type text}, {"CLIENTE_NOMBRE3", type text}, {"CLIENTE_ID", type text}, {"CATEG", type text}, {"SUBCATEG", type text}, {"MARCA", type text}, {"MAT_DESC", type text}, {"MAT_ID", type text}, {"NEGOCIO", type text}, {"VTA_COL", type number}, {"VTAB_COL", type number}, {"DESC_COL", type number}, {"DEV_COL", type number}, {"VTA_FCST_COL", type number}, {"VTA_PLAN_COL", type number}, {"VTA_FCST_POND_COL", type number}, {"VTA_PLAN_POND_COL", type number}, {"VTA_POND_COL", type number}, {"VTA_PROYECTADA_COL", type number}, {"KL", type number}, {"CANTB", type number}})
+				in
+				    Tipos
+
+	annotation PBI_ResultType = Table

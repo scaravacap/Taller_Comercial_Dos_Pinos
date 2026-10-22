@@ -1,0 +1,8 @@
+model Model
+	culture: es-ES
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: es-ES
+
+	annotation PBI_QueryOrder = ["vtx_cmr_gestion_comercial"]
+
+ref table vtx_cmr_gestion_comercial

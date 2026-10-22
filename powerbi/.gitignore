@@ -1,0 +1,7 @@
+# Power BI Desktop escribe aquí la caché de datos y la configuración local al abrir el PBIP.
+**/.pbi/localSettings.json
+**/.pbi/cache.abf
+**/.pbi/
+*.pbix
+*.pbit
+node_modules/
