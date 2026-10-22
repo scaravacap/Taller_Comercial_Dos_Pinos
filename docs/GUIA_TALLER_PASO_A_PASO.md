@@ -15,7 +15,7 @@ Este taller parte de lo que el equipo comercial ya tiene en Unity Catalog: **una
 **Requisitos**
 
 - Un SQL warehouse **Pro o Serverless**: las AI Functions no corren en Classic ([AI Functions](https://learn.microsoft.com/en-us/azure/databricks/large-language-models/ai-functions)).
-- Entitlement **Databricks SQL access** para el notebook, el tablero, el Genie Agent y Excel. Con solo **Consumer access** pueden usar el tablero publicado, el Genie Agent compartido y Genie One, pero no crear objetos ([What is consumer access?](https://learn.microsoft.com/en-us/azure/databricks/ai-bi/consumers/)).
+- Cada participante tiene **Consumer access**, **Workspace access** y permiso `CAN USE` sobre el SQL warehouse del taller.
 - `SELECT` sobre la tabla y la metric view. La sección 2 además necesita `MODIFY` o ser dueño del objeto.
 - Previews activos en el workspace: `ai_decide` (Beta) y, si quieren usar `ai_forecast` versión 2, **Predictive AI Functions**. Para el Genie Agent con documentos: **Analyze Files in Volumes with Genie Agents** (Beta).
 
@@ -536,223 +536,65 @@ Para `ds_decision_ia`: al pegar la consulta, el editor detecta `:gerencia` y cre
 
 ### 4.4 Hágalo con Genie Code
 
-Abran un tablero nuevo, abran Genie Code (el ícono de chispa) y peguen este prompt. Genie Code va a proponer el plan; apruébenlo ([Genie Code for dashboard authoring](https://learn.microsoft.com/en-us/azure/databricks/dashboards/manage/dashboard-agent)).
+El prompt describe el resultado; las consultas las toma Genie Code del JSON del tablero, así que primero ese archivo tiene que estar en su workspace ([Genie Code for dashboard authoring](https://learn.microsoft.com/en-us/azure/databricks/dashboards/manage/dashboard-agent)).
+
+1. Clonen este repositorio en su workspace: **Workspace > Create > Git folder** con la URL `https://github.com/scaravacap/Taller_Comercial_Dos_Pinos` ([Databricks Git folders](https://learn.microsoft.com/en-us/azure/databricks/repos/)). El archivo queda en `dashboards/gestion_comercial_dos_pinos.lvdash.json`.
+2. Abran un tablero nuevo y abran Genie Code (el ícono de chispa).
+3. Peguen el prompt. Luego borren `@gestion_comercial_dos_pinos.lvdash.json` y `@vgd_cmr_gestion_comercial` del texto y vuelvan a escribir `@` para elegir cada uno en el selector, o agréguenlos con **Add context**. Así Genie Code los carga como contexto.
+4. Genie Code va a proponer el plan; revísenlo y apruébenlo.
 
 ```text
 Crea un dashboard llamado "Gestión Comercial Dos Pinos con IA" en español, con los colores de Dos Pinos (verde #1B7A3E, verde claro #4FA56C, amarillo #F5C518, gris oscuro #1A1A1A).
 
-Usa @vgd_cmr_gestion_comercial como dataset ds_metricas para todos los KPI con MEASURE(). Para los demás datasets usa exactamente estas consultas, sin cambiarlas; ds_decision_ia tiene un parámetro :gerencia de tipo texto con valor por defecto TODAS:
+Usa @vgd_cmr_gestion_comercial como dataset ds_metricas para todos los KPI con MEASURE().
 
-Dataset ds_avance_diario:
-```sql
-WITH fechas AS (
-  SELECT DISTINCT FECHA_CONTAB AS fecha FROM vtx_cmr_gestion_comercial
-), dims AS (
-  SELECT DISTINCT GERENCIA_BASE AS gerencia_base, CLIGRP3_DESC AS canal_nivel3 FROM vtx_cmr_gestion_comercial
-), diario AS (
-  SELECT FECHA_CONTAB AS fecha, GERENCIA_BASE AS gerencia_base, CLIGRP3_DESC AS canal_nivel3,
-         SUM(VTA_COL) AS venta_dia, SUM(VTA_PLAN_COL) AS plan_mes
-  FROM vtx_cmr_gestion_comercial GROUP BY ALL
-), grilla AS (
-  SELECT f.fecha, d.gerencia_base, d.canal_nivel3,
-         COALESCE(x.venta_dia, 0) AS venta_dia,
-         SUM(COALESCE(x.plan_mes, 0)) OVER (PARTITION BY d.gerencia_base, d.canal_nivel3) AS plan_mes,
-         DENSE_RANK() OVER (ORDER BY f.fecha) AS dia_laboral
-  FROM fechas f CROSS JOIN dims d
-  LEFT JOIN diario x ON x.fecha = f.fecha AND x.gerencia_base = d.gerencia_base AND x.canal_nivel3 = d.canal_nivel3
-)
-SELECT fecha, gerencia_base, canal_nivel3, venta_dia,
-       SUM(venta_dia) OVER (PARTITION BY gerencia_base, canal_nivel3 ORDER BY fecha) AS venta_acumulada,
-       plan_mes * dia_laboral / 27 AS plan_prorrateado
-FROM grilla
-ORDER BY fecha
-```
-
-Dataset ds_pronostico:
-```sql
-WITH observado AS (
-  SELECT FECHA_CONTAB AS fecha, GERENCIA_BASE AS gerencia_base, SUM(VTA_COL) AS venta_neta
-  FROM vtx_cmr_gestion_comercial
-  WHERE FECHA_CONTAB > DATE'2026-10-01'
-  GROUP BY ALL
-), pronostico AS (
-  SELECT * FROM ai_forecast(
-    observed => TABLE(observado),
-    horizon => '2026-10-31',
-    time_col => 'fecha',
-    value_col => 'venta_neta',
-    group_col => 'gerencia_base',
-    prediction_interval_width => 0.8,
-    frequency => 'D')
-)
-SELECT fecha, gerencia_base, venta_neta AS venta_real, CAST(NULL AS DOUBLE) AS venta_pronostico,
-       CAST(NULL AS DOUBLE) AS limite_inferior, CAST(NULL AS DOUBLE) AS limite_superior
-FROM observado
-UNION ALL
-SELECT p.fecha, p.gerencia_base, NULL, p.venta_neta_forecast, p.venta_neta_lower, p.venta_neta_upper
-FROM pronostico p
-WHERE p.fecha > (SELECT MAX(fecha) FROM observado) AND DAYOFWEEK(p.fecha) <> 1
-ORDER BY fecha
-```
-
-Dataset ds_cierre_proyectado:
-```sql
-WITH observado AS (
-  SELECT FECHA_CONTAB AS fecha, SUM(VTA_COL) AS venta_neta
-  FROM vtx_cmr_gestion_comercial
-  WHERE FECHA_CONTAB > DATE'2026-10-01'
-  GROUP BY ALL
-), resto AS (
-  SELECT SUM(venta_neta_forecast) AS venta_pronosticada_resto,
-         SUM(venta_neta_lower) AS resto_escenario_bajo,
-         SUM(venta_neta_upper) AS resto_escenario_alto
-  FROM ai_forecast(
-    observed => TABLE(observado), horizon => '2026-10-31', time_col => 'fecha',
-    value_col => 'venta_neta', prediction_interval_width => 0.8, frequency => 'D')
-  WHERE fecha > (SELECT MAX(fecha) FROM observado) AND DAYOFWEEK(fecha) <> 1
-), mes AS (
-  SELECT SUM(VTA_COL) AS venta_real_mes, SUM(VTA_PLAN_COL) AS venta_plan,
-         SUM(VTA_PROYECTADA_COL) AS proyeccion_dos_pinos
-  FROM vtx_cmr_gestion_comercial
-)
-SELECT venta_real_mes, venta_pronosticada_resto,
-       venta_real_mes + venta_pronosticada_resto AS cierre_proyectado,
-       venta_plan,
-       (venta_real_mes + venta_pronosticada_resto) / venta_plan AS cumplimiento_proyectado,
-       (venta_real_mes + resto_escenario_bajo) / venta_plan AS cumplimiento_escenario_bajo,
-       (venta_real_mes + resto_escenario_alto) / venta_plan AS cumplimiento_escenario_alto,
-       proyeccion_dos_pinos,
-       proyeccion_dos_pinos / venta_plan AS cumplimiento_proyeccion_dos_pinos
-FROM mes CROSS JOIN resto
-```
-
-Dataset ds_gerencias:
-```sql
-SELECT 'TODAS' AS gerencia
-UNION ALL
-SELECT DISTINCT GERENCIA_BASE AS gerencia FROM vtx_cmr_gestion_comercial
-```
-
-Dataset ds_decision_ia:
-```sql
-WITH kpi AS (
-  SELECT CLIENTE_NOMBRE3 AS cliente, GERENCIA_BASE AS gerencia_base,
-         SUM(VTA_COL) AS venta_neta, SUM(VTA_PLAN_COL) AS venta_plan,
-         ROUND(TRY_DIVIDE(SUM(VTA_COL), SUM(VTA_PLAN_COL)) * 100, 1) AS cumplimiento_plan_pct,
-         ROUND(MAX(D_LABOR) / MAX(LABOR_MES_ACT) * 100, 1) AS avance_dias_pct,
-         ROUND(TRY_DIVIDE(SUM(DESC_COL), SUM(VTAB_COL)) * 100, 2) AS descuento_pct,
-         ROUND(TRY_DIVIDE(-SUM(DEV_COL), SUM(VTAB_COL)) * 100, 2) AS devolucion_pct,
-         COUNT(DISTINCT MAT_ID) AS skus_vendidos
-  FROM vtx_cmr_gestion_comercial
-  WHERE (:gerencia = 'TODAS' OR GERENCIA_BASE = :gerencia)
-  GROUP BY ALL
-  HAVING SUM(VTA_PLAN_COL) > 0
-), decision AS (
-  SELECT *, ROUND(avance_dias_pct - cumplimiento_plan_pct, 1) AS brecha_puntos,
-    ai_decide(
-      to_json(named_struct('cliente', cliente,
-                           'brecha_puntos', ROUND(avance_dias_pct - cumplimiento_plan_pct, 1),
-                           'descuento_pct', descuento_pct,
-                           'devolucion_pct', devolucion_pct,
-                           'skus_vendidos', skus_vendidos)),
-      '{"accion": {"type": "choice",
-                   "instructions": "Elige la accion comercial para este cliente de Dos Pinos antes del cierre de mes. brecha_puntos positiva significa que el cliente va atrasado frente a los dias laborados.",
-                   "criteria": {"acelerar": "brecha_puntos mayor a 0 y descuento_pct menor a 3 y devolucion_pct menor a 1",
-                                "mantener": "brecha_puntos menor o igual a 0 y descuento_pct menor a 3 y devolucion_pct menor a 1",
-                                "revisar_descuentos": "descuento_pct mayor o igual a 3",
-                                "atender_devoluciones": "devolucion_pct mayor o igual a 1 y descuento_pct menor a 3"}},
-        "urgencia": {"type": "score",
-                     "instructions": "Que tan urgente es actuar con este cliente segun brecha_puntos?",
-                     "criteria": ["Sin presion: brecha_puntos menor o igual a 0",
-                                  "Atender esta semana: brecha_puntos entre 0 y 15",
-                                  "Actuar hoy: brecha_puntos mayor a 15"]}}'
-    ) AS d
-  FROM kpi
-)
-SELECT cliente, gerencia_base, venta_neta, venta_plan, cumplimiento_plan_pct, avance_dias_pct, brecha_puntos,
-       descuento_pct, devolucion_pct, skus_vendidos,
-       d:response.answers.accion.choice::string AS accion_ia,
-       ROUND(d:response.answers.accion.confidence::double, 2) AS confianza_accion,
-       ROUND(d:response.answers.urgencia.score::double, 2) AS urgencia_ia
-FROM decision
-ORDER BY urgencia_ia DESC, brecha_puntos DESC
-```
-
-Dataset ds_segmento_ia:
-```sql
-WITH top_materiales AS (
-  SELECT MAT_DESC AS material, CATEG AS categoria, SUM(VTA_COL) AS venta_neta, SUM(KL) AS kilolitros
-  FROM vtx_cmr_gestion_comercial
-  GROUP BY ALL
-  ORDER BY venta_neta DESC
-  LIMIT 60
-)
-SELECT material, categoria, venta_neta, kilolitros,
-       ai_classify(material, ARRAY('lacteo saludable', 'indulgente o snack', 'bebida no lactea', 'basico de canasta')) AS segmento_ia
-FROM top_materiales
-ORDER BY venta_neta DESC
-```
-
-Dataset ds_resumen_ejecutivo:
-```sql
-WITH g AS (
-  SELECT GERENCIA_BASE AS gerencia_base,
-         ROUND(SUM(VTA_COL) / 1e6, 1) AS venta_neta_millones,
-         ROUND(TRY_DIVIDE(SUM(VTA_COL), SUM(VTA_PLAN_COL)) * 100, 1) AS cumplimiento_plan_pct,
-         ROUND(TRY_DIVIDE(SUM(DESC_COL), SUM(VTAB_COL)) * 100, 2) AS descuento_pct
-  FROM vtx_cmr_gestion_comercial
-  GROUP BY ALL
-), cat AS (
-  SELECT GERENCIA_BASE AS gerencia_base, MAX_BY(CATEG, venta) AS categoria_lider
-  FROM (SELECT GERENCIA_BASE, CATEG, SUM(VTA_COL) AS venta FROM vtx_cmr_gestion_comercial GROUP BY ALL)
-  GROUP BY ALL
-)
-SELECT gerencia_base, venta_neta_millones, cumplimiento_plan_pct, descuento_pct, categoria_lider,
-       regexp_replace(
-         ai_gen(CONCAT('Eres analista comercial de Dos Pinos. En maximo dos oraciones y en espanol, resume el desempeno de octubre ',
-                       'de la gerencia ', gerencia_base, ': venta neta de ', venta_neta_millones, ' millones de colones, ',
-                       cumplimiento_plan_pct, '% del plan con 55.6% de los dias laborables transcurridos, descuento de ',
-                       descuento_pct, '% sobre venta bruta; su categoria lider es ', categoria_lider,
-                       '. Termina con una recomendacion concreta. No uses guiones largos.')),
-         '\\s*\u2014\\s*', ', ') AS resumen_ia
-FROM g JOIN cat USING (gerencia_base)
-ORDER BY venta_neta_millones DESC
-```
+Los demás datasets ya están escritos en @gestion_comercial_dos_pinos.lvdash.json: toma de ese archivo la consulta SQL de cada dataset (campo queryLines) y úsala sin cambios. Lo que devuelve cada uno:
+- ds_avance_diario: venta diaria y acumulada por fecha, gerencia y canal nivel 3, junto al plan del mes prorrateado por día laboral.
+- ds_pronostico: venta real y pronóstico diario con ai_forecast por gerencia hasta fin de mes, con límite inferior y superior.
+- ds_cierre_proyectado: una sola fila con el cierre proyectado del mes (venta real más el pronóstico de ai_forecast para los días que faltan), los escenarios bajo y alto, el plan y la proyección propia de Dos Pinos.
+- ds_gerencias: las opciones del selector de gerencia: TODAS más cada gerencia.
+- ds_decision_ia: por cliente, el cumplimiento del plan, la brecha contra el avance esperado del mes, el descuento, la devolución y la acción y urgencia que sugiere ai_decide; filtra por el parámetro :gerencia (texto, por defecto TODAS).
+- ds_segmento_ia: los 60 materiales con más venta y el segmento que les asigna ai_classify.
+- ds_resumen_ejecutivo: un resumen ejecutivo en español por gerencia, escrito con ai_gen.
 
 Construye estas páginas y widgets, en este orden:
 
 Página "Filtros globales":
-- Filtros de selección múltiple sobre `gerencia_base`, `canal_nivel3`, `categoria`, `provincia` y `marca`. En cada filtro, conecten el campo en todos los datasets que lo tengan (la metric view los tiene todos; `ds_avance_diario` y `ds_pronostico` tienen `gerencia_base`).
+- Filtros de selección múltiple sobre gerencia_base, canal_nivel3, categoria, provincia y marca. En cada filtro, conecta el campo en todos los datasets que lo tengan (la metric view los tiene todos; ds_avance_diario y ds_pronostico tienen gerencia_base).
+
 Página "Resumen comercial":
 - Texto: título y subtítulo del tablero.
-- 4 contadores sobre `ds_metricas`: **Venta neta** (`MEASURE(venta_neta_col)`, formato moneda compacta), **% Cumplimiento plan** (`cumplimiento_plan_col`), **% Cumplimiento forecast** (`cumplimiento_fcst_col`) y **Clientes activos** (`clientes_activos`).
-- Barras agrupadas **Venta real vs plan por gerencia**: eje X `gerencia_base`, eje Y `venta_neta_col` y `venta_plan_col`.
-- Línea **Avance acumulado vs plan prorrateado** sobre `ds_avance_diario`: eje X `fecha`, eje Y `SUM(venta_acumulada)` y `SUM(plan_prorrateado)`.
-- Tabla **Desempeño por categoría** sobre `ds_metricas`: `categoria`, venta neta, plan, forecast, % cumplimiento plan, descuento y devolución, ordenada por venta neta.
-- Pie **Venta por negocio**: `negocio` y `venta_neta_col`.
-- Mapa de puntos **Clientes** con `latitud`, `longitud` y tamaño por `venta_neta_col`.
+- 4 contadores sobre ds_metricas: Venta neta (MEASURE(venta_neta_col), formato moneda compacta), % Cumplimiento plan (cumplimiento_plan_col), % Cumplimiento forecast (cumplimiento_fcst_col) y Clientes activos (clientes_activos).
+- Barras agrupadas Venta real vs plan por gerencia: eje X gerencia_base, eje Y venta_neta_col y venta_plan_col.
+- Línea Avance acumulado vs plan prorrateado sobre ds_avance_diario: eje X fecha, eje Y SUM(venta_acumulada) y SUM(plan_prorrateado).
+- Tabla Desempeño por categoría sobre ds_metricas: categoria, venta neta, plan, forecast, % cumplimiento plan, descuento y devolución, ordenada por venta neta.
+- Pie Venta por negocio: negocio y venta_neta_col.
+- Mapa de puntos Clientes con latitud, longitud y tamaño por venta_neta_col.
 - Texto con la nota: el plan del mes está cargado el día 1, por eso el tablero no filtra por fecha.
-Página "IA: pronóstico y decisiones":
-- Texto: una línea que explica `ai_forecast` y otra que explica `ai_decide`.
-- Contadores sobre `ds_cierre_proyectado`: **Cierre proyectado** (`cierre_proyectado`), **% plan proyectado** (`cumplimiento_proyectado`, formato porcentaje), **Escenario bajo** y **Escenario alto** (`cumplimiento_escenario_bajo`, `cumplimiento_escenario_alto`) y **% plan con proyección Dos Pinos** (`cumplimiento_proyeccion_dos_pinos`).
-- Gráfico de línea con pronóstico sobre `ds_pronostico`: eje X `fecha`, series `venta_real` y `venta_pronostico`, banda entre `limite_inferior` y `limite_superior`.
-- Filtro de selección única **Gerencia para la recomendación IA**, conectado al parámetro `gerencia` de `ds_decision_ia`, con valor por defecto `TODAS`.
-- Tabla **Acción recomendada por cliente** sobre `ds_decision_ia`: `cliente`, `gerencia_base`, `cumplimiento_plan_pct`, `brecha_puntos`, `descuento_pct`, `devolucion_pct`, `accion_ia`, `confianza_accion` y `urgencia_ia`, ordenada por urgencia.
-- Barras **Clientes por acción**: `accion_ia` y conteo de `cliente`.
-- Barras **Venta por segmento IA** sobre `ds_segmento_ia`: `segmento_ia` y `SUM(venta_neta)`.
-- Tabla **Resumen ejecutivo IA** sobre `ds_resumen_ejecutivo`, a todo el ancho.
 
-Formatos: montos en colones compactos con un decimal; las columnas que terminan en _pct están en escala 0 a 100; cumplimiento_proyectado, cumplimiento_escenario_bajo, cumplimiento_escenario_alto y cumplimiento_proyeccion_dos_pinos están en escala 0 a 1 y van con formato porcentaje. No agregues filtro de fecha. Antes de crear los widgets, muéstrame el plan y espera mi aprobación.
+Página "IA: pronóstico y decisiones":
+- Texto: una línea que explica ai_forecast y otra que explica ai_decide.
+- Contadores sobre ds_cierre_proyectado: Cierre proyectado (cierre_proyectado), % plan proyectado (cumplimiento_proyectado, formato porcentaje), Escenario bajo y Escenario alto (cumplimiento_escenario_bajo, cumplimiento_escenario_alto) y % plan con proyección Dos Pinos (cumplimiento_proyeccion_dos_pinos).
+- Gráfico de línea con pronóstico sobre ds_pronostico: eje X fecha, series venta_real y venta_pronostico, banda entre limite_inferior y limite_superior.
+- Filtro de selección única Gerencia para la recomendación IA, conectado al parámetro gerencia de ds_decision_ia, con valor por defecto TODAS.
+- Tabla Acción recomendada por cliente sobre ds_decision_ia: cliente, gerencia_base, cumplimiento_plan_pct, brecha_puntos, descuento_pct, devolucion_pct, accion_ia, confianza_accion y urgencia_ia, ordenada por urgencia.
+- Barras Clientes por acción: accion_ia y conteo de cliente.
+- Barras Venta por segmento IA sobre ds_segmento_ia: segmento_ia y SUM(venta_neta).
+- Tabla Resumen ejecutivo IA sobre ds_resumen_ejecutivo, a todo el ancho.
+
+Formatos: montos en colones compactos con un decimal. Las columnas que terminan en _pct están en escala 0 a 100. cumplimiento_proyectado, cumplimiento_escenario_bajo, cumplimiento_escenario_alto y cumplimiento_proyeccion_dos_pinos están en escala 0 a 1 y van con formato porcentaje. No agregues filtro de fecha.
+
+Antes de crear los widgets, muéstrame el plan y espera mi aprobación.
 ```
 
 ### 4.5 Migrar el reporte de Power BI con `/importBI`
 
-La carpeta [`powerbi/`](../powerbi/) tiene el reporte "Análisis de Ventas Dos Pinos" conectado a Databricks con el conector de Azure Databricks (modo Import; las instrucciones de conexión están en su README). En Genie Code, `/importBI` convierte un reporte de Power BI en un tablero AI/BI y en metric views de Unity Catalog ([Import BI files using Genie Code](https://learn.microsoft.com/en-us/azure/databricks/dashboards/manage/import-bi)).
+La carpeta [`powerbi/`](../powerbi/) tiene el reporte "Análisis de Ventas Dos Pinos" conectado a Databricks con el conector de Azure Databricks (modo Import; las instrucciones de conexión están en su README). Tiene dos páginas, **Resumen del mes** y **Clientes y calidad comercial**, y 19 medidas DAX con las mismas definiciones que la metric view. En Genie Code, `/importBI` convierte un reporte de Power BI en un tablero AI/BI y en metric views de Unity Catalog ([Import BI files using Genie Code](https://learn.microsoft.com/en-us/azure/databricks/dashboards/manage/import-bi)).
 
-1. En Power BI Desktop: File > Export > **Power BI template (.pbit)**. La documentación acepta `.pbit` y `.tmdl`.
-2. Tomen una captura del reporte: Genie Code la usa para validar el diseño y los números.
-3. En un tablero nuevo, abran Genie Code y escriban `/importBI`, adjunten el `.pbit` y la captura.
-4. Comparen los KPI del tablero importado con el reporte original.
+1. En Power BI Desktop: **Refresh** para cargar los datos y luego File > Export > **Power BI template (.pbit)**. La documentación acepta `.pbit` y `.tmdl`.
+2. Tomen una captura de cada página: Genie Code la usa para validar el diseño y los números.
+3. En un tablero nuevo, abran Genie Code y escriban `/importBI`, adjunten el `.pbit` y las capturas.
+4. Comparen los KPI del tablero importado con el reporte: venta neta, plan, % cumplimiento, avance esperado y proyección de cierre tienen que coincidir, con y sin filtro de gerencia.
 
 ## 5. Genie Agent paso a paso
 
@@ -779,7 +621,7 @@ La configuración completa está en [`genie/genie_agent_configuracion.md`](../ge
 3. **Sources > Add > Volume** y seleccionen el volume completo.
 4. Pregunten en **Agent mode**: "¿Qué clientes superan el límite de descuento de su gerencia según la política comercial?". Genie cruza la tabla con el documento y cita la página.
 
-Requisitos de esta parte (Beta): cada usuario necesita `READ VOLUME`, **Workspace access** y **Databricks SQL access**; con solo Consumer access no funciona ([Analyze files in volumes](https://learn.microsoft.com/en-us/azure/databricks/genie-agents/volumes)).
+Esta parte está en Beta y cada usuario necesita `READ VOLUME` sobre el volume ([Analyze files in volumes](https://learn.microsoft.com/en-us/azure/databricks/genie-agents/volumes)).
 
 ### 5.4 Benchmarks: medir antes de compartir
 
@@ -795,7 +637,7 @@ Compartan el agente con el grupo comercial con **CAN RUN**. Cada usuario necesit
 
 Al crear un agente nuevo, Genie Code se abre solo. Peguen este prompt:
 
-```text
+````text
 Crea un Genie agent llamado "Asistente Comercial Dos Pinos" con la descripción: "Seguimiento de la venta del mes del canal moderno (Supermercados WM, Supermercados y Cuentas Especiales): venta neta, plan, forecast, cumplimiento, descuentos y devoluciones por cliente, categoría y marca. Incluye el documento de política comercial de ejemplo."
 
 Fuentes: @vgd_cmr_gestion_comercial y @vtx_cmr_gestion_comercial, y el volume documentos_comerciales con la política comercial. En la tabla, activa entity matching en CATEG, CLIENTE_NOMBRE3, GERENCIA_BASE, MARCA, PROV_DESC.
@@ -902,7 +744,7 @@ Agrega estos benchmarks con su SQL de respuesta:
 - "¿Cuál es el cliente con mayor descuento sobre venta bruta?": `SELECT CLIENTE_NOMBRE3 AS cliente, SUM(DESC_COL) / SUM(VTAB_COL) * 100 AS descuento_pct FROM vtx_cmr_gestion_comercial GROUP BY ALL HAVING SUM(VTAB_COL) > 0 ORDER BY descuento_pct DESC LIMIT 1`
 
 Muéstrame la configuración antes de guardarla.
-```
+````
 
 ## 6. Excel: la metric view en una tabla dinámica
 

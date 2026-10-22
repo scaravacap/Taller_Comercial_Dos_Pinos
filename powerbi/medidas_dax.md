@@ -2,29 +2,21 @@
 
 Generado por `_build/generate_pbip.js`. Todas viven en la tabla `vtx_cmr_gestion_comercial` del modelo (`Analisis_Ventas_Dos_Pinos.SemanticModel`). Montos en millones de colones (M₡).
 
-> **Plan y FCST ponderados.** El plan y el forecast del mes se cargan completos el día 1. `VTA_PLAN_POND_COL` y `VTA_FCST_POND_COL` ya vienen prorrateados a los días laborados (15 de 27), así que `% Cump Plan` compara contra lo que se esperaba vender a la fecha, igual que el reporte original. `% Avance Plan Mes` compara contra el mes completo.
+> **Mismas definiciones que la metric view.** El plan y el forecast del mes se cargan completos el día 1, así que `% Cumplimiento Plan` compara la venta neta contra el mes completo, igual que `cumplimiento_plan_col` en `vgd_cmr_gestion_comercial`. Para saber si se va atrasado se compara contra `% Avance Esperado` (días laborados / laborables, 15 de 27): `Brecha vs Avance pts` es la diferencia en puntos.
 
 ## 1. Ventas (M₡)
 
-### Venta Real M
+### Venta Neta M
 
-Venta neta en millones de colones. Formato: `#,0.0`.
-
-```dax
-Venta Real M = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), 1000000)
-```
-
-### Venta Bruta M
-
-Venta bruta en millones de colones. Formato: `#,0.0`.
+Venta neta en millones de colones (venta_neta_col en la metric view). Formato: `#,0.0`.
 
 ```dax
-Venta Bruta M = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTAB_COL]), 1000000)
+Venta Neta M = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), 1000000)
 ```
 
 ### Plan Mes M
 
-Plan del mes completo (se carga el día 1). Formato: `#,0.0`.
+Plan del mes completo, cargado el día 1 (venta_plan_col). Formato: `#,0.0`.
 
 ```dax
 Plan Mes M = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]), 1000000)
@@ -32,84 +24,60 @@ Plan Mes M = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]), 1000000)
 
 ### FCST Mes M
 
-Forecast del mes completo (se carga el día 1). Formato: `#,0.0`.
+Forecast comercial del mes completo, cargado el día 1 (venta_fcst_col). Formato: `#,0.0`.
 
 ```dax
 FCST Mes M = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_FCST_COL]), 1000000)
 ```
 
-### Plan Pond M
+### Falta para Plan M
 
-Plan ponderado a los días laborados (plan mes × laborados / laborables). Formato: `#,0.0`.
+Venta que falta para cumplir el plan del mes. Formato: `#,0.0`.
 
 ```dax
-Plan Pond M = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PLAN_POND_COL]), 1000000)
+Falta para Plan M = [Plan Mes M] - [Venta Neta M]
 ```
 
-### FCST Pond M
+### Proyeccion Cierre M
 
-Forecast ponderado a los días laborados. Formato: `#,0.0`.
-
-```dax
-FCST Pond M = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_FCST_POND_COL]), 1000000)
-```
-
-### Venta Proyectada M
-
-Proyección de cierre: venta real / laborados × laborables. Formato: `#,0.0`.
+Proyección de cierre de Dos Pinos: venta real / días laborados × días laborables (venta_proyectada_col). Formato: `#,0.0`.
 
 ```dax
-Venta Proyectada M = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PROYECTADA_COL]), 1000000)
-```
-
-### Dif vs Plan M
-
-Δ₡ contra el plan ponderado. Formato: `#,0.0`.
-
-```dax
-Dif vs Plan M = [Venta Real M] - [Plan Pond M]
-```
-
-### Dif vs FCST M
-
-Δ₡ contra el forecast ponderado. Formato: `#,0.0`.
-
-```dax
-Dif vs FCST M = [Venta Real M] - [FCST Pond M]
+Proyeccion Cierre M = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PROYECTADA_COL]), 1000000)
 ```
 
 ## 2. Cumplimiento
 
-### % Cump Plan
+### % Cumplimiento Plan
 
-Venta real / plan ponderado (como el reporte original). Formato: `0.0%`.
+Venta neta / plan del mes (cumplimiento_plan_col). Formato: `0.0%`.
 
 ```dax
-% Cump Plan = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_PLAN_POND_COL]))
+% Cumplimiento Plan = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]))
 ```
 
-### % Cump FCST
+### % Cumplimiento FCST
 
-Venta real / forecast ponderado. Formato: `0.0%`.
+Venta neta / forecast del mes (cumplimiento_fcst_col). Formato: `0.0%`.
 
 ```dax
-% Cump FCST = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_FCST_POND_COL]))
+% Cumplimiento FCST = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_FCST_COL]))
 ```
 
-### % Avance Plan Mes
+### % Avance Esperado
 
-Venta real / plan del mes completo. Formato: `0.0%`.
+Días laborados / días laborables del mes: lo que debería llevarse vendido hoy. Formato: `0.0%`.
 
 ```dax
-% Avance Plan Mes = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]))
+% Avance Esperado = DIVIDE(MAX(vtx_cmr_gestion_comercial[D_LABOR]), MAX(vtx_cmr_gestion_comercial[LABOR_MES_ACT]))
 ```
 
-### % Avance FCST Mes
+### Brecha vs Avance pts
 
-Venta real / forecast del mes completo. Formato: `0.0%`.
+Puntos de cumplimiento por encima (+) o por debajo (-) del avance esperado. Formato: `+0.0;-0.0;0.0`.
 
 ```dax
-% Avance FCST Mes = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_FCST_COL]))
+Brecha vs Avance pts = ([% Cumplimiento Plan] - [% Avance Esperado]) * 100
 ```
 
 ### % Proyeccion vs Plan
@@ -124,18 +92,18 @@ Proyección de cierre / plan del mes. Formato: `0.0%`.
 
 ### Venta Acumulada M
 
-Venta real acumulada hasta el día del mes. Formato: `#,0.0`.
+Venta neta acumulada hasta el día del mes. Formato: `#,0.0`.
 
 ```dax
-Venta Acumulada M = CALCULATE([Venta Real M], FILTER(ALL(vtx_cmr_gestion_comercial[DIA_MES]), vtx_cmr_gestion_comercial[DIA_MES] <= MAX(vtx_cmr_gestion_comercial[DIA_MES])))
+Venta Acumulada M = CALCULATE([Venta Neta M], FILTER(ALL(vtx_cmr_gestion_comercial[DIA_MES]), vtx_cmr_gestion_comercial[DIA_MES] <= MAX(vtx_cmr_gestion_comercial[DIA_MES])))
 ```
 
-### Plan Pond Acumulado M
+### Plan Prorrateado Acumulado M
 
-Plan del mes prorrateado por días con venta hasta el día del mes. Formato: `#,0.0`.
+Plan del mes prorrateado por los días laborados hasta el día del mes. Formato: `#,0.0`.
 
 ```dax
-Plan Pond Acumulado M = CALCULATE([Plan Mes M], ALL(vtx_cmr_gestion_comercial[DIA_MES])) * DIVIDE(CALCULATE(DISTINCTCOUNT(vtx_cmr_gestion_comercial[DIA_MES]), FILTER(ALL(vtx_cmr_gestion_comercial[DIA_MES]), vtx_cmr_gestion_comercial[DIA_MES] <= MAX(vtx_cmr_gestion_comercial[DIA_MES]))), MAX(vtx_cmr_gestion_comercial[LABOR_MES_ACT]))
+Plan Prorrateado Acumulado M = CALCULATE([Plan Mes M], ALL(vtx_cmr_gestion_comercial[DIA_MES])) * DIVIDE(CALCULATE(DISTINCTCOUNT(vtx_cmr_gestion_comercial[DIA_MES]), FILTER(ALL(vtx_cmr_gestion_comercial[DIA_MES]), vtx_cmr_gestion_comercial[DIA_MES] <= MAX(vtx_cmr_gestion_comercial[DIA_MES]))), MAX(vtx_cmr_gestion_comercial[LABOR_MES_ACT]))
 ```
 
 ## 4. Calidad comercial
@@ -150,7 +118,7 @@ Descuento sobre venta bruta. Formato: `0.0%`.
 
 ### % Devolucion
 
-Devolución sobre venta bruta (DEV_COL viene en negativo). Formato: `0.0%`.
+Devolución sobre venta bruta (DEV_COL viene en negativo). Formato: `0.00%`.
 
 ```dax
 % Devolucion = DIVIDE(-SUM(vtx_cmr_gestion_comercial[DEV_COL]), SUM(vtx_cmr_gestion_comercial[VTAB_COL]))
@@ -158,34 +126,26 @@ Devolución sobre venta bruta (DEV_COL viene en negativo). Formato: `0.0%`.
 
 ### Clientes Activos
 
-Clientes con movimiento. Formato: `#,0`.
+Clientes con movimiento (clientes_activos). Formato: `#,0`.
 
 ```dax
 Clientes Activos = DISTINCTCOUNT(vtx_cmr_gestion_comercial[CLIENTE_ID])
 ```
 
-### SKUs
+### SKUs Vendidos
 
-Materiales distintos con movimiento. Formato: `#,0`.
+Materiales distintos con movimiento (skus_vendidos). Formato: `#,0`.
 
 ```dax
-SKUs = DISTINCTCOUNT(vtx_cmr_gestion_comercial[MAT_ID])
+SKUs Vendidos = DISTINCTCOUNT(vtx_cmr_gestion_comercial[MAT_ID])
 ```
 
 ### Volumen KL
 
-Volumen en kilolitros. Formato: `#,0.0`.
+Volumen en kilolitros (kilolitros). Formato: `#,0.0`.
 
 ```dax
 Volumen KL = SUM(vtx_cmr_gestion_comercial[KL])
-```
-
-### Venta Top 10 Material M
-
-Venta real solo para los 10 materiales de mayor venta en el filtro actual. Formato: `#,0.0`.
-
-```dax
-Venta Top 10 Material M = IF(RANKX(ALLSELECTED(vtx_cmr_gestion_comercial[MAT_DESC]), [Venta Real M]) <= 10, [Venta Real M])
 ```
 
 ## 5. Calendario
@@ -206,50 +166,36 @@ Días laborables del mes. Formato: `0`.
 Dias Laborables = MAX(vtx_cmr_gestion_comercial[LABOR_MES_ACT])
 ```
 
-### Dias Pendientes
-
-Días laborables pendientes. Formato: `0`.
-
-```dax
-Dias Pendientes = MAX(vtx_cmr_gestion_comercial[D_PENDI])
-```
-
 ## Bloque para "Vista de consulta DAX"
 
 Pega esto en la vista de consulta DAX de Power BI Desktop para probar las medidas sueltas:
 
 ```dax
 DEFINE
-	MEASURE vtx_cmr_gestion_comercial[Venta Real M] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), 1000000)
-	MEASURE vtx_cmr_gestion_comercial[Venta Bruta M] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTAB_COL]), 1000000)
+	MEASURE vtx_cmr_gestion_comercial[Venta Neta M] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), 1000000)
 	MEASURE vtx_cmr_gestion_comercial[Plan Mes M] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]), 1000000)
 	MEASURE vtx_cmr_gestion_comercial[FCST Mes M] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_FCST_COL]), 1000000)
-	MEASURE vtx_cmr_gestion_comercial[Plan Pond M] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PLAN_POND_COL]), 1000000)
-	MEASURE vtx_cmr_gestion_comercial[FCST Pond M] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_FCST_POND_COL]), 1000000)
-	MEASURE vtx_cmr_gestion_comercial[Venta Proyectada M] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PROYECTADA_COL]), 1000000)
-	MEASURE vtx_cmr_gestion_comercial[Dif vs Plan M] = [Venta Real M] - [Plan Pond M]
-	MEASURE vtx_cmr_gestion_comercial[Dif vs FCST M] = [Venta Real M] - [FCST Pond M]
-	MEASURE vtx_cmr_gestion_comercial[% Cump Plan] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_PLAN_POND_COL]))
-	MEASURE vtx_cmr_gestion_comercial[% Cump FCST] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_FCST_POND_COL]))
-	MEASURE vtx_cmr_gestion_comercial[% Avance Plan Mes] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]))
-	MEASURE vtx_cmr_gestion_comercial[% Avance FCST Mes] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_FCST_COL]))
+	MEASURE vtx_cmr_gestion_comercial[Falta para Plan M] = [Plan Mes M] - [Venta Neta M]
+	MEASURE vtx_cmr_gestion_comercial[Proyeccion Cierre M] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PROYECTADA_COL]), 1000000)
+	MEASURE vtx_cmr_gestion_comercial[% Cumplimiento Plan] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]))
+	MEASURE vtx_cmr_gestion_comercial[% Cumplimiento FCST] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_FCST_COL]))
+	MEASURE vtx_cmr_gestion_comercial[% Avance Esperado] = DIVIDE(MAX(vtx_cmr_gestion_comercial[D_LABOR]), MAX(vtx_cmr_gestion_comercial[LABOR_MES_ACT]))
+	MEASURE vtx_cmr_gestion_comercial[Brecha vs Avance pts] = ([% Cumplimiento Plan] - [% Avance Esperado]) * 100
 	MEASURE vtx_cmr_gestion_comercial[% Proyeccion vs Plan] = DIVIDE(SUM(vtx_cmr_gestion_comercial[VTA_PROYECTADA_COL]), SUM(vtx_cmr_gestion_comercial[VTA_PLAN_COL]))
-	MEASURE vtx_cmr_gestion_comercial[Venta Acumulada M] = CALCULATE([Venta Real M], FILTER(ALL(vtx_cmr_gestion_comercial[DIA_MES]), vtx_cmr_gestion_comercial[DIA_MES] <= MAX(vtx_cmr_gestion_comercial[DIA_MES])))
-	MEASURE vtx_cmr_gestion_comercial[Plan Pond Acumulado M] = CALCULATE([Plan Mes M], ALL(vtx_cmr_gestion_comercial[DIA_MES])) * DIVIDE(CALCULATE(DISTINCTCOUNT(vtx_cmr_gestion_comercial[DIA_MES]), FILTER(ALL(vtx_cmr_gestion_comercial[DIA_MES]), vtx_cmr_gestion_comercial[DIA_MES] <= MAX(vtx_cmr_gestion_comercial[DIA_MES]))), MAX(vtx_cmr_gestion_comercial[LABOR_MES_ACT]))
+	MEASURE vtx_cmr_gestion_comercial[Venta Acumulada M] = CALCULATE([Venta Neta M], FILTER(ALL(vtx_cmr_gestion_comercial[DIA_MES]), vtx_cmr_gestion_comercial[DIA_MES] <= MAX(vtx_cmr_gestion_comercial[DIA_MES])))
+	MEASURE vtx_cmr_gestion_comercial[Plan Prorrateado Acumulado M] = CALCULATE([Plan Mes M], ALL(vtx_cmr_gestion_comercial[DIA_MES])) * DIVIDE(CALCULATE(DISTINCTCOUNT(vtx_cmr_gestion_comercial[DIA_MES]), FILTER(ALL(vtx_cmr_gestion_comercial[DIA_MES]), vtx_cmr_gestion_comercial[DIA_MES] <= MAX(vtx_cmr_gestion_comercial[DIA_MES]))), MAX(vtx_cmr_gestion_comercial[LABOR_MES_ACT]))
 	MEASURE vtx_cmr_gestion_comercial[% Descuento] = DIVIDE(SUM(vtx_cmr_gestion_comercial[DESC_COL]), SUM(vtx_cmr_gestion_comercial[VTAB_COL]))
 	MEASURE vtx_cmr_gestion_comercial[% Devolucion] = DIVIDE(-SUM(vtx_cmr_gestion_comercial[DEV_COL]), SUM(vtx_cmr_gestion_comercial[VTAB_COL]))
 	MEASURE vtx_cmr_gestion_comercial[Clientes Activos] = DISTINCTCOUNT(vtx_cmr_gestion_comercial[CLIENTE_ID])
-	MEASURE vtx_cmr_gestion_comercial[SKUs] = DISTINCTCOUNT(vtx_cmr_gestion_comercial[MAT_ID])
+	MEASURE vtx_cmr_gestion_comercial[SKUs Vendidos] = DISTINCTCOUNT(vtx_cmr_gestion_comercial[MAT_ID])
 	MEASURE vtx_cmr_gestion_comercial[Volumen KL] = SUM(vtx_cmr_gestion_comercial[KL])
-	MEASURE vtx_cmr_gestion_comercial[Venta Top 10 Material M] = IF(RANKX(ALLSELECTED(vtx_cmr_gestion_comercial[MAT_DESC]), [Venta Real M]) <= 10, [Venta Real M])
 	MEASURE vtx_cmr_gestion_comercial[Dias Laborados] = MAX(vtx_cmr_gestion_comercial[D_LABOR])
 	MEASURE vtx_cmr_gestion_comercial[Dias Laborables] = MAX(vtx_cmr_gestion_comercial[LABOR_MES_ACT])
-	MEASURE vtx_cmr_gestion_comercial[Dias Pendientes] = MAX(vtx_cmr_gestion_comercial[D_PENDI])
 EVALUATE
 	SUMMARIZECOLUMNS(
 		vtx_cmr_gestion_comercial[GERENCIA_BASE],
-		"Venta Real M", [Venta Real M],
-		"% Cump Plan", [% Cump Plan],
-		"% Cump FCST", [% Cump FCST]
+		"Venta Neta M", [Venta Neta M],
+		"% Cumplimiento Plan", [% Cumplimiento Plan],
+		"Brecha vs Avance pts", [Brecha vs Avance pts]
 	)
 ```

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /*
  * Generador del proyecto PBIP "Analisis_Ventas_Dos_Pinos" (taller comercial Dos Pinos).
- * Replica el reporte "ANÁLISIS DE VENTAS TOTALES": modelo semantico TMDL conectado a
- * Azure Databricks (tabla vtx_cmr_gestion_comercial) + reporte PBIR con medidas DAX.
+ * Reporte de gestion comercial para la demo de /importBI: modelo semantico TMDL conectado a
+ * Azure Databricks (tabla vtx_cmr_gestion_comercial) + reporte PBIR con medidas DAX alineadas
+ * a la metric view vgd_cmr_gestion_comercial.
  * Basado en el generador de taller-aibi-dashboards, que ya abre en Power BI Desktop.
  *
  * Uso:    node generate_pbip.js
@@ -56,10 +57,8 @@ const PAGE_BG = "#F2F5F3";
 const COLS = [
   ["FECHA_CONTAB", "dateTime", "type date", "Short Date"],
   ["DIA_MES", "int64", "Int64.Type"],
-  ["MES_L", "string", "type text"],
   ["LABOR_MES_ACT", "double", "type number", "0"],
   ["D_LABOR", "double", "type number", "0"],
-  ["D_PENDI", "double", "type number", "0"],
   ["GERENCIA_BASE", "string", "type text"],
   ["CLIGRP3_DESC", "string", "type text"],
   ["FORMATO_DESC", "string", "type text"],
@@ -80,12 +79,8 @@ const COLS = [
   ["DEV_COL", "double", "type number", "#,0"],
   ["VTA_FCST_COL", "double", "type number", "#,0"],
   ["VTA_PLAN_COL", "double", "type number", "#,0"],
-  ["VTA_FCST_POND_COL", "double", "type number", "#,0"],
-  ["VTA_PLAN_POND_COL", "double", "type number", "#,0"],
-  ["VTA_POND_COL", "double", "type number", "#,0"],
   ["VTA_PROYECTADA_COL", "double", "type number", "#,0"],
   ["KL", "double", "type number", "#,0.0"],
-  ["CANTB", "double", "type number", "#,0"],
 ];
 
 // ── Medidas DAX: [nombre, expresion, formato, carpeta, descripcion] ──────────
@@ -94,37 +89,32 @@ const PCT = "0.0%";
 const INT = "#,0";
 const c = (col) => `${T}[${col}]`;
 
+const PTS = "+0.0;-0.0;0.0";
 const MEASURES = [
-  // Montos en millones de colones
-  ["Venta Real M", `DIVIDE(SUM(${c("VTA_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Venta neta en millones de colones."],
-  ["Venta Bruta M", `DIVIDE(SUM(${c("VTAB_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Venta bruta en millones de colones."],
-  ["Plan Mes M", `DIVIDE(SUM(${c("VTA_PLAN_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Plan del mes completo (se carga el día 1)."],
-  ["FCST Mes M", `DIVIDE(SUM(${c("VTA_FCST_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Forecast del mes completo (se carga el día 1)."],
-  ["Plan Pond M", `DIVIDE(SUM(${c("VTA_PLAN_POND_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Plan ponderado a los días laborados (plan mes × laborados / laborables)."],
-  ["FCST Pond M", `DIVIDE(SUM(${c("VTA_FCST_POND_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Forecast ponderado a los días laborados."],
-  ["Venta Proyectada M", `DIVIDE(SUM(${c("VTA_PROYECTADA_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Proyección de cierre: venta real / laborados × laborables."],
-  ["Dif vs Plan M", `[Venta Real M] - [Plan Pond M]`, M, "1. Ventas (M₡)", "Δ₡ contra el plan ponderado."],
-  ["Dif vs FCST M", `[Venta Real M] - [FCST Pond M]`, M, "1. Ventas (M₡)", "Δ₡ contra el forecast ponderado."],
+  // Montos en millones de colones; mismas definiciones que la metric view vgd_cmr_gestion_comercial
+  ["Venta Neta M", `DIVIDE(SUM(${c("VTA_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Venta neta en millones de colones (venta_neta_col en la metric view)."],
+  ["Plan Mes M", `DIVIDE(SUM(${c("VTA_PLAN_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Plan del mes completo, cargado el día 1 (venta_plan_col)."],
+  ["FCST Mes M", `DIVIDE(SUM(${c("VTA_FCST_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Forecast comercial del mes completo, cargado el día 1 (venta_fcst_col)."],
+  ["Falta para Plan M", `[Plan Mes M] - [Venta Neta M]`, M, "1. Ventas (M₡)", "Venta que falta para cumplir el plan del mes."],
+  ["Proyeccion Cierre M", `DIVIDE(SUM(${c("VTA_PROYECTADA_COL")}), 1000000)`, M, "1. Ventas (M₡)", "Proyección de cierre de Dos Pinos: venta real / días laborados × días laborables (venta_proyectada_col)."],
   // Cumplimiento
-  ["% Cump Plan", `DIVIDE(SUM(${c("VTA_COL")}), SUM(${c("VTA_PLAN_POND_COL")}))`, PCT, "2. Cumplimiento", "Venta real / plan ponderado (como el reporte original)."],
-  ["% Cump FCST", `DIVIDE(SUM(${c("VTA_COL")}), SUM(${c("VTA_FCST_POND_COL")}))`, PCT, "2. Cumplimiento", "Venta real / forecast ponderado."],
-  ["% Avance Plan Mes", `DIVIDE(SUM(${c("VTA_COL")}), SUM(${c("VTA_PLAN_COL")}))`, PCT, "2. Cumplimiento", "Venta real / plan del mes completo."],
-  ["% Avance FCST Mes", `DIVIDE(SUM(${c("VTA_COL")}), SUM(${c("VTA_FCST_COL")}))`, PCT, "2. Cumplimiento", "Venta real / forecast del mes completo."],
+  ["% Cumplimiento Plan", `DIVIDE(SUM(${c("VTA_COL")}), SUM(${c("VTA_PLAN_COL")}))`, PCT, "2. Cumplimiento", "Venta neta / plan del mes (cumplimiento_plan_col)."],
+  ["% Cumplimiento FCST", `DIVIDE(SUM(${c("VTA_COL")}), SUM(${c("VTA_FCST_COL")}))`, PCT, "2. Cumplimiento", "Venta neta / forecast del mes (cumplimiento_fcst_col)."],
+  ["% Avance Esperado", `DIVIDE(MAX(${c("D_LABOR")}), MAX(${c("LABOR_MES_ACT")}))`, PCT, "2. Cumplimiento", "Días laborados / días laborables del mes: lo que debería llevarse vendido hoy."],
+  ["Brecha vs Avance pts", `([% Cumplimiento Plan] - [% Avance Esperado]) * 100`, PTS, "2. Cumplimiento", "Puntos de cumplimiento por encima (+) o por debajo (-) del avance esperado."],
   ["% Proyeccion vs Plan", `DIVIDE(SUM(${c("VTA_PROYECTADA_COL")}), SUM(${c("VTA_PLAN_COL")}))`, PCT, "2. Cumplimiento", "Proyección de cierre / plan del mes."],
   // Avance diario
-  ["Venta Acumulada M", `CALCULATE([Venta Real M], FILTER(ALL(${c("DIA_MES")}), ${c("DIA_MES")} <= MAX(${c("DIA_MES")})))`, M, "3. Avance diario", "Venta real acumulada hasta el día del mes."],
-  ["Plan Pond Acumulado M", `CALCULATE([Plan Mes M], ALL(${c("DIA_MES")})) * DIVIDE(CALCULATE(DISTINCTCOUNT(${c("DIA_MES")}), FILTER(ALL(${c("DIA_MES")}), ${c("DIA_MES")} <= MAX(${c("DIA_MES")}))), MAX(${c("LABOR_MES_ACT")}))`, M, "3. Avance diario", "Plan del mes prorrateado por días con venta hasta el día del mes."],
+  ["Venta Acumulada M", `CALCULATE([Venta Neta M], FILTER(ALL(${c("DIA_MES")}), ${c("DIA_MES")} <= MAX(${c("DIA_MES")})))`, M, "3. Avance diario", "Venta neta acumulada hasta el día del mes."],
+  ["Plan Prorrateado Acumulado M", `CALCULATE([Plan Mes M], ALL(${c("DIA_MES")})) * DIVIDE(CALCULATE(DISTINCTCOUNT(${c("DIA_MES")}), FILTER(ALL(${c("DIA_MES")}), ${c("DIA_MES")} <= MAX(${c("DIA_MES")}))), MAX(${c("LABOR_MES_ACT")}))`, M, "3. Avance diario", "Plan del mes prorrateado por los días laborados hasta el día del mes."],
   // Calidad comercial
   ["% Descuento", `DIVIDE(SUM(${c("DESC_COL")}), SUM(${c("VTAB_COL")}))`, PCT, "4. Calidad comercial", "Descuento sobre venta bruta."],
-  ["% Devolucion", `DIVIDE(-SUM(${c("DEV_COL")}), SUM(${c("VTAB_COL")}))`, PCT, "4. Calidad comercial", "Devolución sobre venta bruta (DEV_COL viene en negativo)."],
-  ["Clientes Activos", `DISTINCTCOUNT(${c("CLIENTE_ID")})`, INT, "4. Calidad comercial", "Clientes con movimiento."],
-  ["SKUs", `DISTINCTCOUNT(${c("MAT_ID")})`, INT, "4. Calidad comercial", "Materiales distintos con movimiento."],
-  ["Volumen KL", `SUM(${c("KL")})`, M, "4. Calidad comercial", "Volumen en kilolitros."],
-  ["Venta Top 10 Material M", `IF(RANKX(ALLSELECTED(${c("MAT_DESC")}), [Venta Real M]) <= 10, [Venta Real M])`, M, "4. Calidad comercial", "Venta real solo para los 10 materiales de mayor venta en el filtro actual."],
+  ["% Devolucion", `DIVIDE(-SUM(${c("DEV_COL")}), SUM(${c("VTAB_COL")}))`, "0.00%", "4. Calidad comercial", "Devolución sobre venta bruta (DEV_COL viene en negativo)."],
+  ["Clientes Activos", `DISTINCTCOUNT(${c("CLIENTE_ID")})`, INT, "4. Calidad comercial", "Clientes con movimiento (clientes_activos)."],
+  ["SKUs Vendidos", `DISTINCTCOUNT(${c("MAT_ID")})`, INT, "4. Calidad comercial", "Materiales distintos con movimiento (skus_vendidos)."],
+  ["Volumen KL", `SUM(${c("KL")})`, M, "4. Calidad comercial", "Volumen en kilolitros (kilolitros)."],
   // Calendario comercial
   ["Dias Laborados", `MAX(${c("D_LABOR")})`, "0", "5. Calendario", "Días laborados del mes."],
   ["Dias Laborables", `MAX(${c("LABOR_MES_ACT")})`, "0", "5. Calendario", "Días laborables del mes."],
-  ["Dias Pendientes", `MAX(${c("D_PENDI")})`, "0", "5. Calendario", "Días laborables pendientes."],
 ];
 
 // ── TMDL ─────────────────────────────────────────────────────────────────────
@@ -238,111 +228,131 @@ const slicer = (pageKey, box, col, label) =>
     objects: { data: [{ properties: { mode: str("Dropdown") } }] },
   });
 
-const MATRIX_VALUES = () => [
-  projM("Venta Real M", "VENTA REAL"),
-  projM("Plan Pond M", "PLAN POND."),
-  projM("Dif vs Plan M", "Δ₡ PLAN"),
-  projM("Dif vs FCST M", "Δ₡ FCST"),
-  projM("% Cump Plan", "% CUMP PLAN"),
-  projM("% Cump FCST", "% CUMP FCST"),
-];
-const matrixObjects = {
+const tblObjects = {
   columnHeaders: [{ properties: { backColor: color(GREEN), fontColor: color(WHITE), fontSize: num(9) } }],
-  rowHeaders: [{ properties: { fontSize: num(9) } }],
   values: [{ properties: { fontSize: num(9) } }],
 };
-const matrix = (pageKey, box, rowCol, rowLabel, title) =>
-  visual(pageKey, "pivotTable", box, {
-    roles: { Rows: [projC(rowCol, rowLabel)], Values: MATRIX_VALUES() },
-    title,
-    objects: matrixObjects,
-    sort: sortDesc("Venta Real M"),
-  });
+const seriesColors = (a, b) => ({
+  dataPoint: [
+    { properties: { fill: color(GREEN) }, selector: { metadata: `${T}.${a}` } },
+    { properties: { fill: color(ORANGE) }, selector: { metadata: `${T}.${b}` } },
+  ],
+});
+
+// Encabezado comun: titulo + 3 filtros desplegables
+const header = (pg, title, subtitle) => [
+  textbox(pg, [20, 8, 600, 64], title, subtitle),
+  slicer(pg, [640, 8, 200, 64], "GERENCIA_BASE", "Gerencia"),
+  slicer(pg, [850, 8, 200, 64], "CLIGRP3_DESC", "Canal"),
+  slicer(pg, [1060, 8, 200, 64], "MARCA", "Marca"),
+];
+// Banda de 6 KPI
+const kpis = (pg, list) => list.map(([m, label], i) => card(pg, [20 + i * 208, 84, 196, 96], m, label));
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Pagina 1: Análisis de Ventas Totales (replica del reporte original)
+// Pagina 1: Resumen del mes
 // ═══════════════════════════════════════════════════════════════════════════
-const P1 = "analisis";
+const P1 = "resumen";
 const page1 = {
   key: P1,
-  title: "Análisis de Ventas Totales",
+  title: "Resumen del mes",
   visuals: [
-    textbox(P1, [20, 8, 720, 62], "ANÁLISIS DE VENTAS TOTALES", "Análisis de ventas en millones de colones · Plan y FCST ponderados a días laborados"),
-    card(P1, [780, 10, 150, 60], "Dias Laborados", "LABORADOS"),
-    card(P1, [945, 10, 150, 60], "Dias Laborables", "LABORABLES"),
-    card(P1, [1110, 10, 150, 60], "Dias Pendientes", "PENDIENTES"),
-    visual(P1, "lineClusteredColumnComboChart", [20, 80, 400, 260], {
+    ...header(P1, "GESTIÓN COMERCIAL · OCTUBRE 2026", "Millones de colones. Plan y forecast del mes completo, cargados el día 1."),
+    ...kpis(P1, [
+      ["Venta Neta M", "Venta neta (M₡)"],
+      ["Plan Mes M", "Plan del mes (M₡)"],
+      ["% Cumplimiento Plan", "Cumplimiento plan"],
+      ["% Avance Esperado", "Avance esperado"],
+      ["Brecha vs Avance pts", "Brecha (pts)"],
+      ["% Proyeccion vs Plan", "Proyección cierre"],
+    ]),
+    visual(P1, "lineChart", [20, 192, 620, 262], {
       roles: {
         Category: [projC("DIA_MES", "Día del mes")],
-        Y: [projM("Venta Acumulada M", "Venta acumulada")],
-        Y2: [projM("Plan Pond Acumulado M", "Plan ponderado acumulado")],
+        Y: [projM("Venta Acumulada M", "Venta acumulada"), projM("Plan Prorrateado Acumulado M", "Plan prorrateado")],
       },
-      title: "Avance de venta acumulada vs Plan ponderado",
-      objects: {
-        dataPoint: [
-          { properties: { fill: color(GREEN_LIGHT) } },
-          { properties: { fill: color(ORANGE) }, selector: { metadata: `${T}.Plan Pond Acumulado M` } },
+      title: "Venta acumulada vs plan prorrateado (M₡)",
+      objects: seriesColors("Venta Acumulada M", "Plan Prorrateado Acumulado M"),
+    }),
+    visual(P1, "clusteredColumnChart", [652, 192, 608, 262], {
+      roles: {
+        Category: [projC("GERENCIA_BASE", "Gerencia")],
+        Y: [projM("Venta Neta M", "Venta neta"), projM("Plan Mes M", "Plan del mes")],
+      },
+      title: "Venta neta vs plan por gerencia (M₡)",
+      objects: seriesColors("Venta Neta M", "Plan Mes M"),
+      sort: sortDesc("Venta Neta M"),
+    }),
+    visual(P1, "tableEx", [20, 466, 1240, 244], {
+      roles: {
+        Values: [
+          projC("CATEG", "Categoría"),
+          projM("Venta Neta M", "Venta neta (M₡)"),
+          projM("Plan Mes M", "Plan (M₡)"),
+          projM("Falta para Plan M", "Falta para plan (M₡)"),
+          projM("% Cumplimiento Plan", "% Cumplimiento"),
+          projM("Brecha vs Avance pts", "Brecha (pts)"),
+          projM("% Descuento", "% Descuento"),
+          projM("% Devolucion", "% Devolución"),
         ],
       },
+      title: "Desempeño por categoría",
+      objects: tblObjects,
+      sort: sortDesc("Venta Neta M"),
     }),
-    card(P1, [20, 350, 126, 90], "% Cump Plan", "CUM% PLAN"),
-    card(P1, [157, 350, 126, 90], "% Cump FCST", "CUM% FCST"),
-    card(P1, [294, 350, 126, 90], "Venta Real M", "VENTA REAL (M₡)"),
-    slicer(P1, [20, 450, 400, 80], "CLIGRP3_DESC", "Canal"),
-    slicer(P1, [20, 540, 400, 80], "PROV_DESC", "Provincia"),
-    slicer(P1, [20, 630, 400, 80], "MARCA", "Marca"),
-    matrix(P1, [440, 80, 820, 290], "GERENCIA_BASE", "GERENCIA", "Reporte de Ventas por Gerencia (mes actual, Plan y FCST ponderados)"),
-    matrix(P1, [440, 380, 820, 330], "CATEG", "CATEGORÍA", "Reporte de Ventas por Categoría (mes actual, Plan y FCST ponderados)"),
   ],
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Pagina 2: Detalle por Cliente y Material
+// Pagina 2: Clientes y calidad comercial
 // ═══════════════════════════════════════════════════════════════════════════
-const P2 = "detalle";
+const P2 = "clientes";
 const page2 = {
   key: P2,
-  title: "Detalle por Cliente y Material",
+  title: "Clientes y calidad comercial",
   visuals: [
-    textbox(P2, [20, 8, 900, 62], "DETALLE POR CLIENTE Y MATERIAL", "Venta, descuentos y devoluciones en millones de colones · mes actual"),
-    card(P2, [20, 80, 236, 80], "Venta Real M", "VENTA REAL (M₡)"),
-    card(P2, [266, 80, 236, 80], "Clientes Activos", "CLIENTES ACTIVOS"),
-    card(P2, [512, 80, 236, 80], "SKUs", "SKUs"),
-    card(P2, [758, 80, 246, 80], "% Descuento", "% DESCUENTO"),
-    card(P2, [1014, 80, 246, 80], "% Devolucion", "% DEVOLUCIÓN"),
-    visual(P2, "tableEx", [20, 170, 620, 540], {
+    ...header(P2, "CLIENTES Y CALIDAD COMERCIAL", "Cumplimiento, descuentos y devoluciones por cliente. Millones de colones."),
+    ...kpis(P2, [
+      ["Clientes Activos", "Clientes activos"],
+      ["SKUs Vendidos", "SKUs vendidos"],
+      ["% Cumplimiento FCST", "Cumplimiento FCST"],
+      ["% Descuento", "Descuento"],
+      ["% Devolucion", "Devolución"],
+      ["Volumen KL", "Volumen (KL)"],
+    ]),
+    visual(P2, "tableEx", [20, 192, 760, 518], {
       roles: {
         Values: [
-          projC("CLIENTE_NOMBRE3", "CLIENTE"),
-          projM("Venta Real M", "VENTA REAL"),
-          projM("% Avance Plan Mes", "% AVANCE PLAN MES"),
-          projM("% Descuento", "% DESC."),
-          projM("% Devolucion", "% DEV."),
-          projM("SKUs", "SKUs"),
+          projC("CLIENTE_NOMBRE3", "Cliente"),
+          projC("GERENCIA_BASE", "Gerencia"),
+          projM("Venta Neta M", "Venta neta (M₡)"),
+          projM("Plan Mes M", "Plan (M₡)"),
+          projM("% Cumplimiento Plan", "% Cumplimiento"),
+          projM("Brecha vs Avance pts", "Brecha (pts)"),
+          projM("% Descuento", "% Desc."),
+          projM("% Devolucion", "% Dev."),
         ],
       },
-      title: "Venta por Cliente",
-      objects: { columnHeaders: matrixObjects.columnHeaders, values: matrixObjects.values },
-      sort: sortDesc("Venta Real M"),
+      title: "Desempeño por cliente",
+      objects: tblObjects,
+      sort: sortDesc("Venta Neta M"),
     }),
-    visual(P2, "clusteredBarChart", [650, 170, 610, 330], {
+    visual(P2, "clusteredBarChart", [792, 192, 468, 318], {
       roles: {
-        Category: [projC("MAT_DESC", "Material")],
-        Y: [projM("Venta Top 10 Material M", "Venta real (M₡)")],
+        Category: [projC("MARCA", "Marca")],
+        Y: [projM("Venta Neta M", "Venta neta (M₡)")],
       },
-      title: "Top 10 materiales por venta",
+      title: "Venta neta por marca (M₡)",
       objects: { dataPoint: [{ properties: { fill: color(GREEN) } }] },
-      sort: sortDesc("Venta Top 10 Material M"),
+      sort: sortDesc("Venta Neta M"),
     }),
-    visual(P2, "donutChart", [650, 510, 400, 200], {
+    visual(P2, "donutChart", [792, 522, 468, 188], {
       roles: {
-        Category: [projC("NEGOCIO", "Negocio")],
-        Y: [projM("Venta Real M", "Venta real (M₡)")],
+        Category: [projC("GERENCIA_BASE", "Gerencia")],
+        Y: [projM("Venta Neta M", "Venta neta (M₡)")],
       },
-      title: "Venta por Negocio",
+      title: "Participación por gerencia",
     }),
-    slicer(P2, [1060, 510, 200, 95], "CLIGRP3_DESC", "Canal"),
-    slicer(P2, [1060, 615, 200, 95], "MARCA", "Marca"),
   ],
 };
 
@@ -430,10 +440,10 @@ function writeMeasuresDoc() {
   let md = `# Medidas DAX: Análisis de Ventas Dos Pinos\n\n`;
   md += `Generado por \`_build/generate_pbip.js\`. Todas viven en la tabla \`${T}\` del modelo `;
   md += `(\`${PROJECT}.SemanticModel\`). Montos en millones de colones (M₡).\n\n`;
-  md += `> **Plan y FCST ponderados.** El plan y el forecast del mes se cargan completos el día 1. `;
-  md += `\`VTA_PLAN_POND_COL\` y \`VTA_FCST_POND_COL\` ya vienen prorrateados a los días laborados `;
-  md += `(15 de 27), así que \`% Cump Plan\` compara contra lo que se esperaba vender a la fecha, igual que el reporte original. `;
-  md += `\`% Avance Plan Mes\` compara contra el mes completo.\n\n`;
+  md += `> **Mismas definiciones que la metric view.** El plan y el forecast del mes se cargan completos el día 1, `;
+  md += `así que \`% Cumplimiento Plan\` compara la venta neta contra el mes completo, igual que \`cumplimiento_plan_col\` `;
+  md += `en \`vgd_cmr_gestion_comercial\`. Para saber si se va atrasado se compara contra \`% Avance Esperado\` `;
+  md += `(días laborados / laborables, 15 de 27): \`Brecha vs Avance pts\` es la diferencia en puntos.\n\n`;
   let folder = null;
   for (const [name, expr, fmt, f, desc] of MEASURES) {
     if (f !== folder) {
@@ -444,7 +454,7 @@ function writeMeasuresDoc() {
   }
   md += `## Bloque para "Vista de consulta DAX"\n\nPega esto en la vista de consulta DAX de Power BI Desktop para probar las medidas sueltas:\n\n\`\`\`dax\nDEFINE\n`;
   for (const [name, expr] of MEASURES) md += `\tMEASURE ${T}[${name}] = ${expr}\n`;
-  md += `EVALUATE\n\tSUMMARIZECOLUMNS(\n\t\t${T}[GERENCIA_BASE],\n\t\t"Venta Real M", [Venta Real M],\n\t\t"% Cump Plan", [% Cump Plan],\n\t\t"% Cump FCST", [% Cump FCST]\n\t)\n\`\`\`\n`;
+  md += `EVALUATE\n\tSUMMARIZECOLUMNS(\n\t\t${T}[GERENCIA_BASE],\n\t\t"Venta Neta M", [Venta Neta M],\n\t\t"% Cumplimiento Plan", [% Cumplimiento Plan],\n\t\t"Brecha vs Avance pts", [Brecha vs Avance pts]\n\t)\n\`\`\`\n`;
   writeText(path.join(OUT, "medidas_dax.md"), md);
 }
 

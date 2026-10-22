@@ -1,0 +1,49 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "1d6cf96d8ef0b1c868f3",
+  "position": {
+    "x": 20,
+    "y": 8,
+    "z": 1000,
+    "height": 64,
+    "width": 600,
+    "tabOrder": 1000
+  },
+  "visual": {
+    "visualType": "textbox",
+    "objects": {
+      "general": [
+        {
+          "properties": {
+            "paragraphs": [
+              {
+                "textRuns": [
+                  {
+                    "value": "GESTIÓN COMERCIAL · OCTUBRE 2026",
+                    "textStyle": {
+                      "fontWeight": "bold",
+                      "fontSize": "22pt",
+                      "color": "#00843D"
+                    }
+                  }
+                ]
+              },
+              {
+                "textRuns": [
+                  {
+                    "value": "Millones de colones. Plan y forecast del mes completo, cargados el día 1.",
+                    "textStyle": {
+                      "fontSize": "10pt",
+                      "color": "#4D4D4D"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "visualContainerObjects": {}
+  }
+}
